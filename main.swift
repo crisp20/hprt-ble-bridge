@@ -7,9 +7,11 @@ func log(_ s: String) { FileHandle.standardError.write("\(Date()) \(s)\n".data(u
 
 let env = ProcessInfo.processInfo.environment
 let targetName = env["HPRT_NAME"] ?? "D35BT-B3F8"
-let chunkCap   = Int(env["HPRT_CHUNK"] ?? "") ?? 180
-let fast       = env["HPRT_FAST"] == "1"                  // use write-without-response
-let delayMs    = Int(env["HPRT_DELAY_MS"] ?? "") ?? 0     // pause between chunks
+let flow       = env["HPRT_FLOW"] ?? "delay"               // delay | paced | credit
+let chunkCap   = Int(env["HPRT_CHUNK"] ?? "") ?? 100
+let delayMs    = Int(env["HPRT_DELAY_MS"] ?? "") ?? 20
+let verbose    = env["HPRT_VERBOSE"] == "1"
+let statusUUID = CBUUID(string: "FF03")
 let serviceUUIDs = ["FF00", "49535343-FE7D-4AE5-8FA9-9FAFD205E455", "FFE0", "18F0"].map(CBUUID.init(string:))
 let writeUUIDs = (env["HPRT_CHAR"].map { [$0] } ??
                   ["FF02", "49535343-8841-43F4-A8D4-ECBE34729BB3", "FFE1", "2AF1"]).map(CBUUID.init(string:))
@@ -19,9 +21,13 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   private var central: CBCentralManager!
   private var peripheral: CBPeripheral?
   private var writeChar: CBCharacteristic?
-  private var writeType: CBCharacteristicWriteType = .withResponse
   private var payload = Data()
-  private var chunks: [Data] = []
+  private var offset = 0
+  private var credits = 0, granted = 0, writes = 0
+  private var maxLen: Int?
+  private var draining = false
+  private var started = Date()
+  private var lastNotify = ""
   private var completion: ((Error?) -> Void)?
   private var pendingStart = false
   private var job = 0
@@ -37,7 +43,9 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
     q.async {
       self.job += 1; let myJob = self.job
-      self.completion = completion; self.payload = data; self.writeChar = nil; self.chunks = []
+      self.completion = completion; self.payload = Data(data); self.offset = 0
+      self.writeChar = nil; self.credits = 0; self.granted = 0; self.writes = 0
+      self.maxLen = nil; self.draining = false; self.lastNotify = ""
       if self.central.state == .poweredOn { self.findPeripheral() } else { self.pendingStart = true }
       self.q.asyncAfter(deadline: .now() + 20) {
         if self.job == myJob && self.writeChar == nil {
@@ -55,9 +63,8 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   }
   private func connect(_ p: CBPeripheral) {
     peripheral = p; p.delegate = self
-    log("connecting to \(p.name ?? "?") \(p.identifier)"); central.connect(p)
+    log("connecting to \(p.name ?? "?")"); central.connect(p)
   }
-
   func centralManagerDidUpdateState(_ c: CBCentralManager) {
     log("bluetooth state: \(c.state.rawValue)  (5 = poweredOn, 3 = unauthorized)")
     if c.state == .poweredOn && pendingStart { pendingStart = false; findPeripheral() }
@@ -73,7 +80,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   }
   func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
     if completion != nil {
-      log("  disconnected with \(chunks.count) chunks still unsent")
+      log("  disconnected after \(offset)/\(payload.count) B")
       finish(error ?? BridgeError(description: "disconnected mid-job"))
     }
   }
@@ -81,64 +88,93 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   // ---- services / characteristics ----
   func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
     if let error { return finish(error) }
-    for s in p.services ?? [] { log("service \(s.uuid)"); p.discoverCharacteristics(nil, for: s) }
+    for s in p.services ?? [] { p.discoverCharacteristics(nil, for: s) }
   }
   func peripheral(_ p: CBPeripheral, didDiscoverCharacteristicsFor s: CBService, error: Error?) {
-    for ch in s.characteristics ?? [] { log("  char \(ch.uuid) props=0x\(String(ch.properties.rawValue, radix: 16))") }
+    if verbose { for ch in s.characteristics ?? [] { log("  char \(ch.uuid) props=0x\(String(ch.properties.rawValue, radix: 16))") } }
     for ch in s.characteristics ?? [] where ch.properties.contains(.notify) {
-      p.setNotifyValue(true, for: ch)                     // subscribe to printer status (FF01/FF03)
+      p.setNotifyValue(true, for: ch)                       // printer status (FF01/FF03)
     }
     guard writeChar == nil, completion != nil,
           let ch = s.characteristics?.first(where: {
             writeUUIDs.contains($0.uuid) &&
             ($0.properties.contains(.write) || $0.properties.contains(.writeWithoutResponse)) })
     else { return }
-    writeChar = ch
-    writeType = (ch.properties.contains(.write) && !fast) ? .withResponse : .withoutResponse
-    let size = max(20, min(chunkCap, p.maximumWriteValueLength(for: writeType)))
-    chunks = stride(from: 0, to: payload.count, by: size).map {
-      payload.subdata(in: $0..<min($0 + size, payload.count)) }
-    log("writing \(payload.count) B to \(ch.uuid): \(chunks.count)×\(size) B, " +
-        "\(writeType == .withResponse ? "with" : "without") response, delay \(delayMs) ms")
+    writeChar = ch; started = Date()
+    log("writing \(payload.count) B to \(ch.uuid): flow \(flow), chunk ≤\(chunkCap) B, delay \(delayMs) ms")
+    if flow == "credit" {
+      let myJob = job
+      q.asyncAfter(deadline: .now() + 3) {
+        if self.job == myJob && self.completion != nil && self.granted == 0 {
+          self.finish(BridgeError(description: "no FF03 credits within 3 s – use HPRT_FLOW=delay or paced"))
+        }
+      }
+    }
     pump()
   }
 
   // ---- sending ----
+  private func chunkSize(_ p: CBPeripheral, _ t: CBCharacteristicWriteType) -> Int {
+    max(20, min(chunkCap, maxLen ?? chunkCap, p.maximumWriteValueLength(for: t)))
+  }
+  private func nextChunk(_ size: Int) -> Data {
+    let end = min(offset + size, payload.count)
+    let d = payload.subdata(in: offset..<end); offset = end; writes += 1
+    return d
+  }
   private func pump() {
-    guard let p = peripheral, let ch = writeChar, completion != nil else { return }
-    if chunks.isEmpty {
-      let myJob = job
-      q.asyncAfter(deadline: .now() + 1.5) { if self.job == myJob { self.finish(nil) } }  // let printer drain
-      return
-    }
-    if writeType == .withResponse {
-      p.writeValue(chunks.removeFirst(), for: ch, type: .withResponse)   // next one sent from didWriteValueFor
-    } else if delayMs > 0 {
-      if p.canSendWriteWithoutResponse { p.writeValue(chunks.removeFirst(), for: ch, type: .withoutResponse) }
-      q.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { self.pump() }
-    } else {
-      while !chunks.isEmpty && p.canSendWriteWithoutResponse {
-        p.writeValue(chunks.removeFirst(), for: ch, type: .withoutResponse)
+    guard let p = peripheral, let ch = writeChar, completion != nil, !draining else { return }
+    if offset >= payload.count { return drain() }
+    switch flow {
+    case "credit":                                           // send as many as the printer allows
+      let size = chunkSize(p, .withoutResponse)
+      while credits > 0 && offset < payload.count && p.canSendWriteWithoutResponse {
+        p.writeValue(nextChunk(size), for: ch, type: .withoutResponse); credits -= 1
       }
-      if chunks.isEmpty { pump() }
+      if offset >= payload.count { drain() }
+    case "paced":                                            // no ack, fixed gap
+      if p.canSendWriteWithoutResponse {
+        p.writeValue(nextChunk(chunkSize(p, .withoutResponse)), for: ch, type: .withoutResponse)
+      }
+      q.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { self.pump() }
+    default:                                                 // "delay": ack + gap (proven)
+      p.writeValue(nextChunk(chunkSize(p, .withResponse)), for: ch, type: .withResponse)
     }
   }
   func peripheral(_ p: CBPeripheral, didWriteValueFor ch: CBCharacteristic, error: Error?) {
     if let error { return finish(error) }
-    if chunks.count % 200 == 0 { log("  \(chunks.count) chunks left") }
-    if delayMs > 0 { q.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { self.pump() } }
-    else { pump() }
+    q.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { self.pump() }
   }
-  func peripheralIsReady(toSendWriteWithoutResponse p: CBPeripheral) { if delayMs == 0 { pump() } }
+  func peripheralIsReady(toSendWriteWithoutResponse p: CBPeripheral) { if flow == "credit" { pump() } }
+
+  private func drain() {
+    guard !draining else { return }
+    draining = true
+    let secs = Date().timeIntervalSince(started)
+    log(String(format: "sent %d B in %.1f s (%d writes, %d credits granted)", payload.count, secs, writes, granted))
+    let myJob = job
+    q.asyncAfter(deadline: .now() + 1.5) { if self.job == myJob { self.finish(nil) } }  // let printer drain
+  }
 
   // ---- printer status ----
   func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor ch: CBCharacteristic, error: Error?) {
-    log("  subscribed \(ch.uuid): \(error.map { "\($0)" } ?? "ok")")
+    if let error { log("  subscribe \(ch.uuid) failed: \(error)") }
   }
-  private var lastNotify = ""
   func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
-    let v = ch.value?.map { String(format: "%02x", $0) }.joined() ?? "-"
-    if v != lastNotify { log("  notify \(ch.uuid): \(v)"); lastNotify = v }
+    guard let v = ch.value.map({ [UInt8]($0) }), !v.isEmpty else { return }
+    if ch.uuid == statusUUID && v[0] == 0x01 && v.count >= 2 {       // 01 nn = +nn credits
+      credits += Int(v[1]); granted += Int(v[1])
+      if verbose { log("  +\(v[1]) credits (now \(credits))") }
+      if flow == "credit" { pump() }
+      return
+    }
+    if ch.uuid == statusUUID && v[0] == 0x02 && v.count >= 3 {       // 02 lo hi = max packet
+      maxLen = Int(v[1]) | Int(v[2]) << 8
+      log("  printer max packet: \(maxLen!) B")
+      return
+    }
+    let hex = v.map { String(format: "%02x", $0) }.joined()
+    if hex != lastNotify { log("  notify \(ch.uuid): \(hex)"); lastNotify = hex }
   }
 
   // ---- cleanup ----
@@ -184,8 +220,8 @@ if args.count >= 3 && args[1] == "send" {                      // one-shot test
     }
   }
   listener.start(queue: .main)
-  log("listening on 127.0.0.1:9100 for \(targetName) (chunk \(chunkCap), delay \(delayMs) ms)")
+  log("listening on 127.0.0.1:9100 for \(targetName) (flow \(flow), chunk \(chunkCap), delay \(delayMs) ms)")
   dispatchMain()
 } else {
-  print("usage: hprt-ble-bridge send <file> | serve   (env: HPRT_NAME, HPRT_CHAR, HPRT_CHUNK, HPRT_DELAY_MS, HPRT_FAST=1)")
+  print("usage: hprt-ble-bridge send <file> | serve   (env: HPRT_NAME, HPRT_FLOW=delay|paced|credit, HPRT_CHUNK, HPRT_DELAY_MS, HPRT_VERBOSE=1)")
 }
