@@ -94,10 +94,10 @@ open **System Settings → Privacy & Security → Bluetooth** and enable `hprt-b
 1. In any print dialog:
    **Paper Size → Manage Custom Sizes… → +**, then set width **60 mm**, height **40 mm**, all margins **0**. 
    Name it e.g. **Small Label**. (The HPRT driver has no 60×40 preset.)
-2. In Firefox ⌘P, choose:
+2. In the print dialog, choose:
    - Printer: **HPRT D35BT (Bluetooth)**
    - Paper Size: **Small Label**
-   - Firefox section: ✅ **Ignore Scaling and Shrink To Fit Page Width**
+   - Check ✅: **Ignore Scaling and Shrink To Fit Page Width**
    - Page Headers / Footers: all six **--blank--**
 3. **Presets → Save Current Settings as Preset… → "D35BT label"**.
 
@@ -107,8 +107,7 @@ open **System Settings → Privacy & Security → Bluetooth** and enable `hprt-b
 tail -f /tmp/hprt-ble-bridge.log
 ```
 
-Print a page with large black text,
-for example by opening `data:text/html,<h1 style="font-size:60px;margin:0">Hello BLE</h1>` in Firefox.
+Print a page with large black text, for example [sample.html](/sample.html).
 Expected log:
 
 ```
