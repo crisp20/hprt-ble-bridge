@@ -3,7 +3,17 @@ import CoreBluetooth
 import Network
 
 struct BridgeError: Error, CustomStringConvertible { let description: String }
-func log(_ s: String) { FileHandle.standardError.write("\(Date()) \(s)\n".data(using: .utf8)!) }
+let logFmt: DateFormatter = {
+  let f = DateFormatter()
+  f.locale = Locale(identifier: "en_US_POSIX")   // fixed format, ignores user locale settings
+  f.timeZone = .current                          // Mac's time zone (Asia/Hong_Kong)
+  f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS xxx"   // e.g. 2026-11-24 16:19:29.123 +08:00
+  return f
+}()
+func log(_ s: String) {
+  FileHandle.standardError.write("\(logFmt.string(from: Date())) \(s)\n".data(using: .utf8)!)
+}
+
 
 let env = ProcessInfo.processInfo.environment
 let targetName = env["HPRT_NAME"] ?? "D35BT-B3F8"

@@ -2,7 +2,10 @@
 # Usage: ./install.sh D35BT-XXXX
 set -euo pipefail
 
-NAME="${1:?usage: $0 D35BT-XXXX   (last 4 hex of BT_MAC on self-test label)}"
+ARG="${1:?usage: $0 D35BT-XXXX  (or just XXXX = last 4 hex of BT_MAC on the self-test label)}"
+ARG="$(printf '%s' "$ARG" | tr '[:lower:]' '[:upper:]')"
+case "$ARG" in D35BT-*) NAME="$ARG" ;; *) NAME="D35BT-$ARG" ;; esac
+echo "Printer BLE name: $NAME"
 QUEUE="HPRT_D35BT_BT"
 LABEL="local.$(id -un).hprt-ble-bridge"
 BIN="$HOME/bin/hprt-ble-bridge"
@@ -14,6 +17,7 @@ swiftc -O "$SRC/main.swift" -o "$BIN" \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$SRC/Info.plist"
 
 echo "== 2/4 one-off Bluetooth permission check (allow the prompt for Terminal)"
+launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true   # an existing bridge would hold the printer's only BLE slot
 printf '! 0 200 200 80 1\r\nFORM\r\nPRINT\r\n' > /tmp/hprt-probe.cpcl
 HPRT_NAME="$NAME" HPRT_FLOW=delay "$BIN" send /tmp/hprt-probe.cpcl || {
   echo "Probe failed: power-cycle the printer, close phone apps, re-run."; exit 1; }
