@@ -69,7 +69,11 @@ Don't copy a compiled binary between Macs: Bluetooth permission is tied to the b
 Turn off any devices connected to the printer, then run:
 
 ```sh
-sh install.sh B3F8            # or: sh install.sh D35BT-B3F8
+# sh install.sh <printer id> <port>
+
+# e.g.
+sh install.sh B3F8 9100
+sh install.sh 5676 9101
 ```
 
 What it does:
@@ -82,6 +86,9 @@ What it does:
 | 4/4 | Creates the CUPS queue `HPRT_D35BT_BT` → `socket://127.0.0.1:9100` (asks for your password) |
 
 Re-running the script is safe. It rebuilds the binary and replaces the agent and the queue.
+
+On port collision (installing multiple bridges on the same port), the installation simply fails.
+[Uninstall the existing bridge](#uninstall), then run the installation again.
 
 ## Step 6 – Grant Bluetooth permission to the bridge (if asked)
 
@@ -153,6 +160,18 @@ Jobs sent while the light is red are **lost**, so reprint them.
 
 ## Maintenance
 
+### show all running bridges
+
+```sh
+lpstat -v | grep D35BT
+
+# e.g.
+# device for HPRT_D35BT_5676: socket://127.0.0.1:9101
+# device for HPRT_D35BT_B3F8: socket://127.0.0.1:9100
+```
+
+### Rebuild binary
+
 ```sh
 LABEL="local.$(id -un).hprt-ble-bridge"
 
@@ -166,16 +185,38 @@ launchctl bootout gui/$(id -u)/$LABEL
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/$LABEL.plist
 ```
 
-### Uninstall
+## Uninstall
+
+Each printer has its own bridge and queue:
+
+| Printer | Queue | LaunchAgent | Port | Log |
+|---|---|---|---|---|
+| `D35BT-XXXX` | `HPRT_D35BT_XXXX` | `local.hprt-ble-bridge.XXXX` | 9100, 9101, … | `/tmp/hprt-ble-bridge-XXXX.log` |
+
+The binary `~/bin/hprt-ble-bridge` is shared by all printers.
+The HPRT driver and any **USB queue** are left untouched.
+
+### Remove one printer
 
 ```sh
-LABEL="local.$(id -un).hprt-ble-bridge"
-launchctl bootout gui/$(id -u)/$LABEL 2>/dev/null
-rm -f ~/Library/LaunchAgents/$LABEL.plist ~/bin/hprt-ble-bridge
-sudo lpadmin -x HPRT_D35BT_BT
+SUFFIX=5676                                   # last 4 hex of the printer to remove
+LABEL="local.hprt-ble-bridge.$SUFFIX"
 
-# Optional: remove the Bluetooth permission entry
-tccutil reset BluetoothAlways local.hprt-ble-bridge
+launchctl bootout gui/$(id -u)/$LABEL 2>/dev/null
+rm -f ~/Library/LaunchAgents/$LABEL.plist /tmp/hprt-ble-bridge-$SUFFIX.log
+sudo lpadmin -x "HPRT_D35BT_$SUFFIX"
+
+lpstat -v | grep D35BT                        # queue gone, others unchanged
+```
+
+The other printers keep working. Their ports don't change.
+
+### Remove everything
+
+Remove all printers and print queues.
+
+```sh
+sh ./uninstall.sh
 ```
 
 ---

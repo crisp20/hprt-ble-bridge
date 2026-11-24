@@ -25,6 +25,7 @@ let statusUUID = CBUUID(string: "FF03")
 let serviceUUIDs = ["FF00", "49535343-FE7D-4AE5-8FA9-9FAFD205E455", "FFE0", "18F0"].map(CBUUID.init(string:))
 let writeUUIDs = (env["HPRT_CHAR"].map { [$0] } ??
                   ["FF02", "49535343-8841-43F4-A8D4-ECBE34729BB3", "FFE1", "2AF1"]).map(CBUUID.init(string:))
+let listenPort = UInt16(env["HPRT_PORT"] ?? "") ?? 9100
 
 final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
   private let q = DispatchQueue(label: "ble")
@@ -208,8 +209,9 @@ if args.count >= 3 && args[1] == "send" {                      // one-shot test
   dispatchMain()
 } else if args.count >= 2 && args[1] == "serve" {              // CUPS bridge
   let params = NWParameters.tcp
-  params.requiredInterfaceType = .loopback                     // 127.0.0.1 only
-  let listener = try! NWListener(using: params, on: 9100)
+  params.requiredInterfaceType = .loopback
+  params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: listenPort)!)
+  let listener = try! NWListener(using: params)
   let jobs = DispatchQueue(label: "jobs")                      // one job at a time
   func receiveAll(_ c: NWConnection, _ acc: Data, _ done: @escaping (Data) -> Void) {
     c.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { d, _, complete, err in
@@ -222,7 +224,7 @@ if args.count >= 3 && args[1] == "send" {                      // one-shot test
     receiveAll(c, Data()) { data in
       jobs.async {
         log("job received: \(data.count) bytes")
-        try? data.write(to: URL(fileURLWithPath: "/tmp/hprt-last-job.bin"))
+        try? data.write(to: URL(fileURLWithPath: "/tmp/hprt-last-job-\(listenPort).bin"))
         let sem = DispatchSemaphore(value: 0)
         printer.send(data) { err in log(err.map { "job ERROR: \($0)" } ?? "job done"); sem.signal() }
         sem.wait(); c.cancel()                                 // close → CUPS marks job complete
@@ -230,7 +232,7 @@ if args.count >= 3 && args[1] == "send" {                      // one-shot test
     }
   }
   listener.start(queue: .main)
-  log("listening on 127.0.0.1:9100 for \(targetName) (flow \(flow), chunk \(chunkCap), delay \(delayMs) ms)")
+  log("listening on 127.0.0.1:\(listenPort) for \(targetName) (flow \(flow), chunk \(chunkCap), delay \(delayMs) ms)")
   dispatchMain()
 } else {
   print("usage: hprt-ble-bridge send <file> | serve   (env: HPRT_NAME, HPRT_FLOW=delay|paced|credit, HPRT_CHUNK, HPRT_DELAY_MS, HPRT_VERBOSE=1)")
