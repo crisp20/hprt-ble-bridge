@@ -33,8 +33,8 @@ Background and design: see [TECHNICAL.md](TECHNICAL.md).
    ```
    You should see at least one line (e.g. `… HPRT D35BT, 1.4.10`).
 
-> You do **not** need to add a USB printer first. 
-> The install script creates the Bluetooth queue directly from the installed driver.
+You do **not** need to add a USB printer first. 
+The install script creates the Bluetooth queue directly from the installed driver.
 
 ## Step 2 – Install the Xcode Command Line Tools
 
@@ -50,7 +50,7 @@ xcode-select --install        # skip if `swiftc --version` already works
 2. **Hold FEED ~1.5 s** until the light flashes once, then release → a self-test label prints.
 3. Read `BT_MAC`, e.g. `ba:ab:14:04:b3:f8`. The Bluetooth name is **`D35BT-` + the last 4 hex digits in uppercase**, so here it's `D35BT-B3F8`.
 
-> Pairing in System Settings → Bluetooth is **not required**. BLE connects without pairing.
+Pairing in System Settings → Bluetooth is **not required**. BLE connects without pairing.
 
 ## Step 4 – Get the files
 
