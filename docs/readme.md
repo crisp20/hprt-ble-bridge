@@ -173,6 +173,9 @@ LABEL="local.$(id -un).hprt-ble-bridge"
 launchctl bootout gui/$(id -u)/$LABEL 2>/dev/null
 rm -f ~/Library/LaunchAgents/$LABEL.plist ~/bin/hprt-ble-bridge
 sudo lpadmin -x HPRT_D35BT_BT
+
+# Optional: remove the Bluetooth permission entry
+tccutil reset BluetoothAlways local.hprt-ble-bridge
 ```
 
 ---
