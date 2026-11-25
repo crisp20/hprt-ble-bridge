@@ -1,6 +1,6 @@
 import Foundation
 import CoreBluetooth
-import Network
+import Darwin
 
 struct BridgeError: Error, CustomStringConvertible { let description: String }
 let logFmt: DateFormatter = {
@@ -126,8 +126,19 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
   // ---- sending ----
   private func chunkSize(_ p: CBPeripheral, _ t: CBCharacteristicWriteType) -> Int {
-    max(20, min(chunkCap, maxLen ?? chunkCap, p.maximumWriteValueLength(for: t)))
+    let writeLimit: Int
+    if #available(macOS 10.12, *) {
+      writeLimit = p.maximumWriteValueLength(for: t)
+    } else {
+      writeLimit = 20
+    }
+    return max(20, min(chunkCap, maxLen ?? chunkCap, writeLimit))
   }
+  private func canSendWithoutResponse(_ p: CBPeripheral) -> Bool {
+    if #available(macOS 10.13, *) { return p.canSendWriteWithoutResponse }
+    return true
+  }
+
   private func nextChunk(_ size: Int) -> Data {
     let end = min(offset + size, payload.count)
     let d = payload.subdata(in: offset..<end); offset = end; writes += 1
@@ -139,12 +150,12 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     switch flow {
     case "credit":                                           // send as many as the printer allows
       let size = chunkSize(p, .withoutResponse)
-      while credits > 0 && offset < payload.count && p.canSendWriteWithoutResponse {
+      while credits > 0 && offset < payload.count && canSendWithoutResponse(p) {
         p.writeValue(nextChunk(size), for: ch, type: .withoutResponse); credits -= 1
       }
       if offset >= payload.count { drain() }
     case "paced":                                            // no ack, fixed gap
-      if p.canSendWriteWithoutResponse {
+      if canSendWithoutResponse(p) {
         p.writeValue(nextChunk(chunkSize(p, .withoutResponse)), for: ch, type: .withoutResponse)
       }
       q.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { self.pump() }
@@ -200,6 +211,99 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 let printer = BLEPrinter()
 let args = CommandLine.arguments
 
+func socketError() -> String {
+  return String(cString: strerror(errno))
+}
+
+func receiveAll(_ socketFD: Int32) -> Data? {
+  var data = Data()
+  var buffer = [UInt8](repeating: 0, count: 1 << 16)
+
+  while true {
+    let received = buffer.withUnsafeMutableBufferPointer { bytes -> Int in
+      guard let baseAddress = bytes.baseAddress else { return 0 }
+      return recv(socketFD, baseAddress, bytes.count, 0)
+    }
+
+    if received > 0 {
+      data.append(contentsOf: buffer[0..<received])
+    } else if received == 0 {
+      return data
+    } else if errno != EINTR {
+      log("ERROR: socket read failed: \(socketError())")
+      return nil
+    }
+  }
+}
+
+func runServer() {
+  let serverFD = socket(AF_INET, SOCK_STREAM, 0)
+  guard serverFD >= 0 else {
+    log("FATAL: cannot create TCP socket: \(socketError())")
+    exit(1)
+  }
+
+  var address = sockaddr_in()
+  address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+  address.sin_family = sa_family_t(AF_INET)
+  address.sin_port = in_port_t(listenPort).bigEndian
+  let addressResult = inet_pton(AF_INET, "127.0.0.1", &address.sin_addr)
+  guard addressResult == 1 else {
+    log("FATAL: cannot configure loopback address")
+    Darwin.close(serverFD)
+    exit(1)
+  }
+
+  let bindResult = withUnsafePointer(to: &address) { addressPointer in
+    addressPointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+      bind(serverFD, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+    }
+  }
+  guard bindResult == 0 else {
+    log("FATAL: cannot listen on 127.0.0.1:\(listenPort): \(socketError())")
+    Darwin.close(serverFD)
+    exit(1)
+  }
+  guard listen(serverFD, SOMAXCONN) == 0 else {
+    log("FATAL: cannot start listener on 127.0.0.1:\(listenPort): \(socketError())")
+    Darwin.close(serverFD)
+    exit(1)
+  }
+
+  log("listening on 127.0.0.1:\(listenPort) for \(targetName) (flow \(flow), chunk \(chunkCap), delay \(delayMs) ms)")
+  let jobs = DispatchQueue(label: "jobs")
+  let acceptQueue = DispatchQueue(label: "socket.accept")
+  acceptQueue.async {
+    while true {
+      let clientFD = accept(serverFD, nil, nil)
+      if clientFD < 0 {
+        if errno == EINTR { continue }
+        log("FATAL: accepting TCP connection failed: \(socketError())")
+        exit(1)
+      }
+
+      let clientQueue = DispatchQueue(label: "socket.client.\(clientFD)")
+      clientQueue.async {
+        guard let data = receiveAll(clientFD) else {
+          Darwin.close(clientFD)
+          return
+        }
+        jobs.async {
+          log("job received: \(data.count) bytes")
+          try? data.write(to: URL(fileURLWithPath: "/tmp/hprt-last-job-\(listenPort).bin"))
+          let sem = DispatchSemaphore(value: 0)
+          printer.send(data) { err in
+            log(err.map { "job ERROR: \($0)" } ?? "job done")
+            sem.signal()
+          }
+          sem.wait()
+          Darwin.close(clientFD)
+        }
+      }
+    }
+  }
+}
+
 if args.count >= 3 && args[1] == "send" {                      // one-shot test
   let data = try! Data(contentsOf: URL(fileURLWithPath: args[2]))
   printer.send(data) { err in
@@ -208,39 +312,7 @@ if args.count >= 3 && args[1] == "send" {                      // one-shot test
   }
   dispatchMain()
 } else if args.count >= 2 && args[1] == "serve" {              // CUPS bridge
-  let params = NWParameters.tcp
-  params.requiredInterfaceType = .loopback
-  params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: listenPort)!)
-  let listener = try! NWListener(using: params)
-  let jobs = DispatchQueue(label: "jobs")                      // one job at a time
-  func receiveAll(_ c: NWConnection, _ acc: Data, _ done: @escaping (Data) -> Void) {
-    c.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { d, _, complete, err in
-      var acc = acc; if let d { acc.append(d) }
-      if complete || err != nil { done(acc) } else { receiveAll(c, acc, done) }
-    }
-  }
-  listener.newConnectionHandler = { c in
-    c.start(queue: .global())
-    receiveAll(c, Data()) { data in
-      jobs.async {
-        log("job received: \(data.count) bytes")
-        try? data.write(to: URL(fileURLWithPath: "/tmp/hprt-last-job-\(listenPort).bin"))
-        let sem = DispatchSemaphore(value: 0)
-        printer.send(data) { err in log(err.map { "job ERROR: \($0)" } ?? "job done"); sem.signal() }
-        sem.wait(); c.cancel()                                 // close → CUPS marks job complete
-      }
-    }
-  }
-  listener.stateUpdateHandler = { state in
-    switch state {
-    case .ready:
-      log("listening on 127.0.0.1:\(listenPort) for \(targetName) (flow \(flow), chunk \(chunkCap), delay \(delayMs) ms)")
-    case .failed(let err):
-      log("FATAL: cannot listen on 127.0.0.1:\(listenPort): \(err)"); exit(1)
-    default: break
-    }
-  }
-  listener.start(queue: .main)
+  runServer()
   dispatchMain()
 } else {
   print("usage: hprt-ble-bridge send <file> | serve   (env: HPRT_NAME, HPRT_FLOW=delay|paced|credit, HPRT_CHUNK, HPRT_DELAY_MS, HPRT_VERBOSE=1)")

@@ -14,12 +14,42 @@ Background and design: see [TECHNICAL.md](TECHNICAL.md).
 
 ## Requirements
 
-| Item | Notes |
-|---|---|
-| Mac with Bluetooth LE | Any recent Mac (Intel or Apple Silicon) |
-| Admin rights | Needed once, for `lpadmin` (creating the print queue) |
+| Item                   | Notes                                                                       |
+| ---------------------- | --------------------------------------------------------------------------- |
+| Mac with Bluetooth LE  | Any recent Mac (Intel or Apple Silicon)                                     |
+| Admin rights           | Needed once, for `lpadmin` (creating the print queue)                       |
 | HPRT D35BT, powered on | No other bluetooth devices (i.e. mobile phone) connected to it during setup |
-| This repo | `main.swift`, `Info.plist`, `install.sh` |
+| This repo              | `main.swift`, `Info.plist`, `install.sh`                                    |
+
+## Compatibility
+
+The source supports macOS 10.12.6 and avoids Swift syntax newer than Swift 4.0.3. Xcode
+9.2 shipped Swift 4.0.3 and the macOS 10.13 SDK. `install.sh` explicitly targets macOS
+10.12 when building on Intel, avoiding SDK-default deployment targets older than the BLE
+API requires. On Apple Silicon it uses the host's default target because macOS 10.12 has
+no Apple Silicon support. Build on the target Mac rather than copying a binary built with
+a newer Swift compiler. The bridge uses CoreBluetooth and Darwin sockets; it does not
+depend on Apple's newer `Network` framework.
+
+Swift 4.0.3 shipped with Xcode 9.2. 
+That version of Xcode is intended for macOS 10.12.6 through 10.13.2, 
+so the reliable way to compile and validate this project is on a Mac running one of those systems. 
+A macOS 26 machine can try a side-by-side Xcode 9.2 installation, 
+but its legacy compiler and SDK are not supported there.
+
+For a side-by-side installation, download Xcode 9.2 from Apple's developer downloads,
+unpack it as `/Applications/Xcode_9.2.app`, 
+and invoke its compiler without changing the system-wide developer directory:
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode_9.2.app/Contents/Developer \
+/Applications/Xcode_9.2.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc \
+-target x86_64-apple-macosx10.12 --version
+```
+
+If that compiler cannot run on the host OS, 
+use a Sierra/High Sierra Mac or VM for the legacy build. 
+Docker/Linux cannot compile this project as it requires macOS CoreBluetooth.
 
 ---
 
@@ -78,12 +108,12 @@ sh install.sh 5676 9101
 
 What it does:
 
-| Stage | Action |
-|---|---|
-| 1/4 | Compiles `~/bin/hprt-ble-bridge`, with the Bluetooth usage text embedded |
-| 2/4 | Stops any running bridge, then sends a tiny test job over BLE. The printer **feeds one blank label**, and macOS asks **Terminal** for Bluetooth permission: click **Allow** |
-| 3/4 | Installs and starts the LaunchAgent `~/Library/LaunchAgents/local.<user>.hprt-ble-bridge.plist` |
-| 4/4 | Creates the CUPS queue `HPRT_D35BT_BT` → `socket://127.0.0.1:9100` (asks for your password) |
+| Stage | Action                                                                                                                                                                      |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1/4   | Compiles `~/bin/hprt-ble-bridge`, with the Bluetooth usage text embedded                                                                                                    |
+| 2/4   | Stops any running bridge, then sends a tiny test job over BLE. The printer **feeds one blank label**, and macOS asks **Terminal** for Bluetooth permission: click **Allow** |
+| 3/4   | Installs and starts the LaunchAgent `~/Library/LaunchAgents/local.<user>.hprt-ble-bridge.plist`                                                                             |
+| 4/4   | Creates the CUPS queue `HPRT_D35BT_BT` → `socket://127.0.0.1:9100` (asks for your password)                                                                                 |
 
 Re-running the script is safe. It rebuilds the binary and replaces the agent and the queue.
 
@@ -135,26 +165,26 @@ Expected log:
 
 ## Troubleshooting
 
-| Symptom | Fix |
-|---|---|
-| Log: `scanning…` → `timeout … not found` | Printer off, asleep, stuck, or connected to a phone. **Power-cycle the printer**, close phone apps, and print again |
-| Log: `bluetooth state: 3` | Grant Bluetooth permission (Step 6). This is needed again after rebuilding the binary |
-| Blank label | Run `LC_ALL=C tr -d '\000' < /tmp/hprt-last-job.bin \| wc -c`. A value around **57** means the page image was empty: check "Shrink To Fit Page Width" and the paper size |
-| Log: `refusing … not printer data` | The queue isn't using the HPRT driver. Re-run `install.sh` |
-| Log: `no FF03 credits within 3 s` | Different firmware. Set `HPRT_FLOW` to `delay` in the plist (slower, ~30 s), then `bootout` + `bootstrap` |
-| Nothing in the log at all | Bridge not running: `launchctl print gui/$(id -u)/local.$(id -un).hprt-ble-bridge \| grep state` |
-| Job shows "completed" but nothing printed | Known limitation: CUPS doesn't see Bluetooth failures. Check the log and reprint |
+| Symptom                                   | Fix                                                                                                                                                                      |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Log: `scanning…` → `timeout … not found`  | Printer off, asleep, stuck, or connected to a phone. **Power-cycle the printer**, close phone apps, and print again                                                      |
+| Log: `bluetooth state: 3`                 | Grant Bluetooth permission (Step 6). This is needed again after rebuilding the binary                                                                                    |
+| Blank label                               | Run `LC_ALL=C tr -d '\000' < /tmp/hprt-last-job.bin \| wc -c`. A value around **57** means the page image was empty: check "Shrink To Fit Page Width" and the paper size |
+| Log: `refusing … not printer data`        | The queue isn't using the HPRT driver. Re-run `install.sh`                                                                                                               |
+| Log: `no FF03 credits within 3 s`         | Different firmware. Set `HPRT_FLOW` to `delay` in the plist (slower, ~30 s), then `bootout` + `bootstrap`                                                                |
+| Nothing in the log at all                 | Bridge not running: `launchctl print gui/$(id -u)/local.$(id -un).hprt-ble-bridge \| grep state`                                                                         |
+| Job shows "completed" but nothing printed | Known limitation: CUPS doesn't see Bluetooth failures. Check the log and reprint                                                                                         |
 
 ### Printer indicator (from the HPRT D35 manual §3.4.2)
 
-| Light | Meaning | Fix |
-|---|---|---|
-| Blue, steady | Ready | – |
-| Red, steady | Cover not closed | Press the cover down until it clicks |
-| Red, slow blink | Out of paper / no label | Reload the roll and set the guides |
-| Red, fast blink | Label calibration failed | Hold FEED ~3 s (2 flashes) to recalibrate for gap labels |
-| Orange, slow blink | Jam / label came off the backing | Clear the paper path |
-| Purple | Print head too hot | Let it cool |
+| Light              | Meaning                          | Fix                                                      |
+| ------------------ | -------------------------------- | -------------------------------------------------------- |
+| Blue, steady       | Ready                            | –                                                        |
+| Red, steady        | Cover not closed                 | Press the cover down until it clicks                     |
+| Red, slow blink    | Out of paper / no label          | Reload the roll and set the guides                       |
+| Red, fast blink    | Label calibration failed         | Hold FEED ~3 s (2 flashes) to recalibrate for gap labels |
+| Orange, slow blink | Jam / label came off the backing | Clear the paper path                                     |
+| Purple             | Print head too hot               | Let it cool                                              |
 
 Jobs sent while the light is red are **lost**, so reprint them.
 
@@ -176,7 +206,7 @@ lpstat -v | grep D35BT
 LABEL="local.$(id -un).hprt-ble-bridge"
 
 # After editing main.swift: rebuild + restart (plist unchanged)
-swiftc -O main.swift -o ~/bin/hprt-ble-bridge \
+swiftc -O -target x86_64-apple-macosx10.12 main.swift -o ~/bin/hprt-ble-bridge \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker Info.plist
 launchctl kickstart -k gui/$(id -u)/$LABEL
 
@@ -189,8 +219,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/$LABEL.plist
 
 Each printer has its own bridge and queue:
 
-| Printer | Queue | LaunchAgent | Port | Log |
-|---|---|---|---|---|
+| Printer      | Queue             | LaunchAgent                  | Port          | Log                             |
+| ------------ | ----------------- | ---------------------------- | ------------- | ------------------------------- |
 | `D35BT-XXXX` | `HPRT_D35BT_XXXX` | `local.hprt-ble-bridge.XXXX` | 9100, 9101, … | `/tmp/hprt-ble-bridge-XXXX.log` |
 
 The binary `~/bin/hprt-ble-bridge` is shared by all printers.
@@ -223,13 +253,13 @@ sh ./uninstall.sh
 
 ## Bridge settings (plist `EnvironmentVariables`)
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `HPRT_NAME` | `D35BT-B3F8` | Exact BLE name, case-sensitive |
-| `HPRT_FLOW` | `delay` (`install.sh` sets `credit`) | `credit` = printer-driven flow control (~5 s), `delay` = acknowledge + pause (~30 s), `paced` = fixed pause, no acknowledgement |
-| `HPRT_CHUNK` | `100` | Max bytes per BLE write. The printer itself caps this at 100 |
-| `HPRT_DELAY_MS` | `20` | Pause per write in `delay`/`paced` modes |
-| `HPRT_VERBOSE` | off | `1` logs every characteristic and credit |
+| Variable        | Default                              | Meaning                                                                                                                         |
+| --------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `HPRT_NAME`     | `D35BT-B3F8`                         | Exact BLE name, case-sensitive                                                                                                  |
+| `HPRT_FLOW`     | `delay` (`install.sh` sets `credit`) | `credit` = printer-driven flow control (~5 s), `delay` = acknowledge + pause (~30 s), `paced` = fixed pause, no acknowledgement |
+| `HPRT_CHUNK`    | `100`                                | Max bytes per BLE write. The printer itself caps this at 100                                                                    |
+| `HPRT_DELAY_MS` | `20`                                 | Pause per write in `delay`/`paced` modes                                                                                        |
+| `HPRT_VERBOSE`  | off                                  | `1` logs every characteristic and credit                                                                                        |
 
 ## References
 

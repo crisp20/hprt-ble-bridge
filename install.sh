@@ -20,7 +20,14 @@ grep -q 'HPRT_PORT' "$SRC/main.swift" || { echo "main.swift lacks HPRT_PORT supp
 
 echo "== 1/4 build bridge"
 mkdir -p "$HOME/bin" "$HOME/Library/LaunchAgents"
-swiftc -O "$SRC/main.swift" -o "$BIN" \
+compile_bridge() {
+  if [ "$(uname -m)" = "x86_64" ]; then
+    swiftc -O -target x86_64-apple-macosx10.12 "$@"
+  else
+    swiftc -O "$@"
+  fi
+}
+compile_bridge "$SRC/main.swift" -o "$BIN" \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$SRC/Info.plist"
 
 echo "== 2/4 Bluetooth check (one blank label feeds)"

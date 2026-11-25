@@ -36,7 +36,7 @@ Keep everything that already works (the driver), and replace only the last hop.
                                        ▼
                        socket://127.0.0.1:9100   (loopback only)
                                        │
-                       hprt-ble-bridge serve     (Swift, LaunchAgent, user session)
+                       hprt-ble-bridge serve     (Swift + Darwin sockets, LaunchAgent)
                                        │ CoreBluetooth
                                        ▼
                        D35BT  BLE service FF00 → write FF02, status FF03
@@ -59,7 +59,9 @@ sandbox doesn't need relaxing.
 ### Why Swift?
 
 CoreBluetooth is Apple's native BLE API, so a single compiled Swift file with no dependencies is the
-shortest path. Python (`bleak`) or Node (`noble`) would work, but they bring runtimes and
+shortest path. The local TCP listener uses Darwin's POSIX socket APIs to keep compatibility with
+macOS 10.12 and Swift 4.0.3; Apple's `Network` framework is not available on that system. Python
+(`bleak`) or Node (`noble`) would work, but they bring runtimes and
 packages, and still need the same TCC permission. The `Info.plist` is embedded into the binary
 (`-sectcreate __TEXT __info_plist`) because macOS terminates any process that touches Bluetooth
 without an `NSBluetoothAlwaysUsageDescription`.
@@ -102,7 +104,9 @@ Design choices:
 
 This is credit-based flow control. The printer tells the host exactly how much its receive buffer can
 take. It was confirmed empirically: every job showed *writes = credits granted* (198/198) and never
-overflowed.
+overflowed. macOS 10.12 does not expose CoreBluetooth's later write-readiness property, so the bridge
+uses the printer's credits directly on that OS; newer macOS versions also honor CoreBluetooth's
+readiness signal.
 
 ### Job format (HPRT `raster-cpcl` filter, 60×40 mm)
 
@@ -198,7 +202,6 @@ it's power-cycled.
   [`maximumWriteValueLength(for:)`](https://developer.apple.com/documentation/corebluetooth/cbperipheral/maximumwritevaluelength(for:)) ·
   [`canSendWriteWithoutResponse`](https://developer.apple.com/documentation/corebluetooth/cbperipheral/cansendwritewithoutresponse) ·
   [`NSBluetoothAlwaysUsageDescription`](https://developer.apple.com/documentation/bundleresources/information-property-list/nsbluetoothalwaysusagedescription) ·
-  [`NWListener`](https://developer.apple.com/documentation/network/nwlistener) ·
   [launchd jobs](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html)
 - HPRT: [downloads](https://download.hprt.com/Downloads.html) ·
   [D35 user manual (EN)](https://shop.ribbon.ua/uploads/instructions/2438/ribbonua_hprt_sl32_series_label_printer_user_manual_en.pdf) ·
