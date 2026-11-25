@@ -88,12 +88,12 @@ EOF
 launchctl bootstrap "gui/$UIDN" "$PLIST"
 
 echo "== 4/4 CUPS queue $QUEUE (shared by all accounts)"
-if lpstat -v "$QUEUE" 2>/dev/null | grep -q "socket://127.0.0.1:$PORT\$"; then
+if lpstat -v "$QUEUE" 2>/dev/null | grep -q "socket://127.0.0.1:$PORT/?snmp=false\$"; then
   echo "queue already set up"
 else
   MODEL="$(lpinfo -m | grep -i 'd35bt' | head -1 | cut -d' ' -f1)"
   [ -n "$MODEL" ] || { echo "HPRT D35BT driver not found: an admin must install it from download.hprt.com"; exit 1; }
-  CMD="/usr/sbin/lpadmin -p '$QUEUE' -D 'HPRT D35BT $SUFFIX (Bluetooth)' -v 'socket://127.0.0.1:$PORT' -m '$MODEL' -o PageSize=Custom.60x40mm -E && /usr/sbin/cupsenable '$QUEUE' && /usr/sbin/cupsaccept '$QUEUE'"
+  CMD="/usr/sbin/lpadmin -p '$QUEUE' -D 'HPRT D35BT $SUFFIX (Bluetooth)' -v 'socket://127.0.0.1:$PORT/?snmp=false' -m '$MODEL' -o PageSize=Custom.60x40mm -E && /usr/sbin/cupsenable '$QUEUE' && /usr/sbin/cupsaccept '$QUEUE'"
   echo "Asking for an administrator to create the shared print queue…"
   osascript -e "do shell script \"$CMD\" with administrator privileges" >/dev/null || {
     echo "Admin step cancelled or failed: the bridge is installed, but the queue is not."
