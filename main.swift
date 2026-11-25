@@ -130,7 +130,9 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
   // ---- sending ----
   private func chunkSize(_ p: CBPeripheral, _ t: CBCharacteristicWriteType) -> Int {
-    return max(20, min(chunkCap, maxLen ?? chunkCap, p.maximumWriteValueLength(for: t)))
+    var osMax = 20                                           // BLE minimum (default MTU 23 − 3)
+    if #available(OSX 10.12, *) { osMax = p.maximumWriteValueLength(for: t) }
+    return max(20, min(chunkCap, maxLen ?? chunkCap, osMax))
   }
   private func nextChunk(_ size: Int) -> Data {
     let end = min(offset + size, payload.count)
@@ -171,7 +173,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     if let error = error { return finish(error) }
     q.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { self.pump() }
   }
-  @available(OSX 10.13, *)
+  // Called only by macOS 10.13+; on 10.12 CoreBluetooth never calls it (pump() has its own #available checks)
   func peripheralIsReady(toSendWriteWithoutResponse p: CBPeripheral) { if flow == "credit" { pump() } }
 
   private func drain() {
