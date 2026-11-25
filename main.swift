@@ -98,7 +98,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
   // ---- services / characteristics ----
   func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
-    if let error { return finish(error) }
+    if let error = error { return finish(error) }
     for s in p.services ?? [] { p.discoverCharacteristics(nil, for: s) }
   }
   func peripheral(_ p: CBPeripheral, didDiscoverCharacteristicsFor s: CBService, error: Error?) {
@@ -153,7 +153,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
   }
   func peripheral(_ p: CBPeripheral, didWriteValueFor ch: CBCharacteristic, error: Error?) {
-    if let error { return finish(error) }
+    if let error = error { return finish(error) }
     q.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { self.pump() }
   }
   func peripheralIsReady(toSendWriteWithoutResponse p: CBPeripheral) { if flow == "credit" { pump() } }
@@ -169,7 +169,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
   // ---- printer status ----
   func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor ch: CBCharacteristic, error: Error?) {
-    if let error { log("  subscribe \(ch.uuid) failed: \(error)") }
+    if let error = error { log("  subscribe \(ch.uuid) failed: \(error)") }
   }
   func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
     guard let v = ch.value.map({ [UInt8]($0) }), !v.isEmpty else { return }
@@ -203,7 +203,7 @@ let args = CommandLine.arguments
 if args.count >= 3 && args[1] == "send" {                      // one-shot test
   let data = try! Data(contentsOf: URL(fileURLWithPath: args[2]))
   printer.send(data) { err in
-    if let err { log("ERROR: \(err)"); exit(1) }
+    if let err = err { log("ERROR: \(err)"); exit(1) }
     log("OK: sent \(data.count) bytes"); exit(0)
   }
   dispatchMain()
