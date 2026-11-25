@@ -21,5 +21,5 @@ lsof -nP -iTCP:9100-9199 -sTCP:LISTEN || echo "ports free"
 lpstat -v | grep D35BT                        # only the USB queue (if any) should remain
 
 # 5. Optional: remove the Bluetooth permission entry
-tccutil reset BluetoothAlways local.hprt-ble-bridge
+tccutil reset BluetoothAlways local.hprt-ble-bridge 2>/dev/null || true
 
