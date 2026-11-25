@@ -46,6 +46,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   private var completion: ((Error?) -> Void)?
   private var pendingStart = false
   private var job = 0
+  private var mode = flow
 
   override init() { super.init(); central = CBCentralManager(delegate: self, queue: q) }
 
@@ -60,7 +61,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
       self.job += 1; let myJob = self.job
       self.completion = completion; self.payload = Data(data); self.offset = 0
       self.writeChar = nil; self.credits = 0; self.granted = 0; self.writes = 0
-      self.maxLen = nil; self.draining = false; self.pumpScheduled = false; self.lastNotify = ""
+      self.maxLen = nil; self.draining = false; self.pumpScheduled = false; self.lastNotify = ""; self.mode = flow
       if self.central.state.rawValue == poweredOn { self.findPeripheral() } else { self.pendingStart = true }
       self.q.asyncAfter(deadline: .now() + 20) {
         if self.job == myJob && self.writeChar == nil {
@@ -117,11 +118,12 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     else { return }
     writeChar = ch; started = Date()
     log("writing \(payload.count) B to \(ch.uuid): flow \(flow), chunk ≤\(chunkCap) B, delay \(delayMs) ms")
-    if flow == "credit" {
+    if mode == "credit" {
       let myJob = job
       q.asyncAfter(deadline: .now() + 3) {
         if self.job == myJob && self.completion != nil && self.granted == 0 {
-          self.finish(BridgeError(description: "no FF03 credits within 3 s – use HPRT_FLOW=delay or paced"))
+          log("  no FF03 credits within 3 s – falling back to delay mode for this job")
+          self.mode = "delay"; self.pump()
         }
       }
     }
@@ -142,7 +144,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   private func pump() {
     guard let p = peripheral, let ch = writeChar, completion != nil, !draining else { return }
     if offset >= payload.count { return drain() }
-    switch flow {
+    switch mode {
     case "credit":                                           // send as many as the printer allows
       let size = chunkSize(p, .withoutResponse)
       if #available(OSX 10.13, *) {
@@ -174,7 +176,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     q.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { self.pump() }
   }
   // Called only by macOS 10.13+; on 10.12 CoreBluetooth never calls it (pump() has its own #available checks)
-  func peripheralIsReady(toSendWriteWithoutResponse p: CBPeripheral) { if flow == "credit" { pump() } }
+  func peripheralIsReady(toSendWriteWithoutResponse p: CBPeripheral) { if mode == "credit" { pump() } }
 
   private func drain() {
     guard !draining else { return }
@@ -194,7 +196,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     if ch.uuid == statusUUID && v[0] == 0x01 && v.count >= 2 {       // 01 nn = +nn credits
       credits += Int(v[1]); granted += Int(v[1])
       if verbose { log("  +\(v[1]) credits (now \(credits))") }
-      if flow == "credit" { pump() }
+      if mode == "credit" { pump() }
       return
     }
     if ch.uuid == statusUUID && v[0] == 0x02 && v.count >= 3 {       // 02 lo hi = max packet
