@@ -231,8 +231,16 @@ if args.count >= 3 && args[1] == "send" {                      // one-shot test
       }
     }
   }
+  listener.stateUpdateHandler = { state in
+    switch state {
+    case .ready:
+      log("listening on 127.0.0.1:\(listenPort) for \(targetName) (flow \(flow), chunk \(chunkCap), delay \(delayMs) ms)")
+    case .failed(let err):
+      log("FATAL: cannot listen on 127.0.0.1:\(listenPort): \(err)"); exit(1)
+    default: break
+    }
+  }
   listener.start(queue: .main)
-  log("listening on 127.0.0.1:\(listenPort) for \(targetName) (flow \(flow), chunk \(chunkCap), delay \(delayMs) ms)")
   dispatchMain()
 } else {
   print("usage: hprt-ble-bridge send <file> | serve   (env: HPRT_NAME, HPRT_FLOW=delay|paced|credit, HPRT_CHUNK, HPRT_DELAY_MS, HPRT_VERBOSE=1)")
