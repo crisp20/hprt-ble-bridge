@@ -170,6 +170,15 @@ lpstat -v | grep D35BT
 # device for HPRT_D35BT_B3F8: socket://127.0.0.1:9100
 ```
 
+### logging
+
+```sh
+
+less ~/Library/Logs/hprt-ble-bridge-*.log
+
+# displays all available logs for hprt bridges
+```
+
 ### Rebuild binary
 
 ```sh
