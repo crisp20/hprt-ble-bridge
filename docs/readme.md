@@ -174,7 +174,7 @@ lpstat -v | grep D35BT
 
 ```sh
 
-less ~/Library/Logs/hprt-ble-bridge-*.log
+less +F ~/Library/Logs/hprt-ble-bridge-*.log
 
 # displays all available logs for hprt bridges
 ```
