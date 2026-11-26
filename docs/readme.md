@@ -245,7 +245,7 @@ sh ./uninstall.sh XXXX|--all [--queue]
 | `HPRT_CHUNK`    | `100`                                | Max bytes per BLE write. The printer itself caps this at 100                                                                    |
 | `HPRT_DELAY_MS` | `20`                                 | Pause per write in `delay`/`paced` modes                                                                                        |
 | `HPRT_VERBOSE`  | off                                  | `1` logs every characteristic and credit                                                                                        |
-| `HPRT_DRAIN_MS` | `50`                                 | Drain time (ms) between jobs. Ensures end of job is not lost.                                                                   |
+| `HPRT_DRAIN_MS` | `250`                                | Drain time (ms) between jobs. Ensures end of job is not lost.                                                                   |
 
 ## References
 

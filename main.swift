@@ -22,7 +22,7 @@ let flow       = env["HPRT_FLOW"] ?? "delay"               // delay | paced | cr
 let chunkCap   = Int(env["HPRT_CHUNK"] ?? "") ?? 100
 let delayMs    = Int(env["HPRT_DELAY_MS"] ?? "") ?? 20
 let legacyGapMs = Int(env["HPRT_GAP_MS"] ?? "") ?? 8       // credit mode on macOS < 10.13 only
-let drainMs    = max(0, Int(env["HPRT_DRAIN_MS"] ?? "") ?? 50)      // drain wait to preserve end of job
+let drainMs    = max(0, Int(env["HPRT_DRAIN_MS"] ?? "") ?? 250)      // drain wait to preserve end of job
 let verbose    = env["HPRT_VERBOSE"] == "1"
 let statusUUID = CBUUID(string: "FF03")
 let serviceUUIDs = ["FF00", "49535343-FE7D-4AE5-8FA9-9FAFD205E455", "FFE0", "18F0"].map(CBUUID.init(string:))
