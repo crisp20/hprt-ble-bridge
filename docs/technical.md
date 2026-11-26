@@ -68,8 +68,8 @@ The `Info.plist` is embedded into the binary (`-sectcreate __TEXT __info_plist`)
 ## 3. What the bridge does per job
 
 ```
-CUPS connects to :9100 ─► receive whole job ─► sanity check (refuse %!PS / %PDF / empty)
-      │                                        save copy to /tmp/hprt-last-job.bin
+CUPS connects to :PORT ─► receive whole job ─► sanity check (refuse %!PS / %PDF / empty)
+      │                                        save copy to ~/Library/Logs/hprt-last-job-PORT.bin
       ▼
 scan for exact name "D35BT-XXXX" ─► connect ─► discover services
       ▼
@@ -130,16 +130,16 @@ click Print (system print dialog)
   │ 2) CUPS filters: cgpdftoraster → raster-cpcl          <1 s
   │    socket backend connects to 127.0.0.1:PORT          ~0 s (was ~4 s, see "snmp=false" below)
   ▼
-bridge: "job received"
-  │ 3)  BLE connect + service discovery + subscribe       ~0.6 s
-  ▼
-bridge: "writing N B"
-  │ 4)  BLE transfer, printer-paced (~4.3 KB/s)           ~4.6 s per label (19.5 KB)
-  ▼
-bridge: "sent N B in X s"     ← printer is already printing/feeding (same as USB)
-  │ 5)  1.5 s drain wait, disconnect                      does not delay the label
-  ▼
-bridge: "job done" → CUPS marks the job complete
+bridge: "job received"                                <--------------------------------------------\
+  │ 3)  BLE connect + service discovery + subscribe       ~0.6 s                                   |
+  ▼                                                                                                |
+bridge: "writing N B"                                                                              |
+  │ 4)  BLE transfer, printer-paced (~4.3 KB/s)           ~4.6 s per label in job (19.5 KB)        |
+  ▼                                                                                                |
+bridge: "sent N B in X s"     ← printer is already printing/feeding (same as USB)                  |
+  │ 5)  static drain wait, disconnect                     1.5s delay for next job in queue         |
+  ▼                                                                                                |
+bridge: "job done" → CUPS marks the job complete      --- subsequent queued jobs ------------------/
 ```
 
 ### Print time: BLE vs USB (60 × 40 mm labels)
@@ -199,6 +199,7 @@ See [apple/cups #5256](https://github.com/apple/cups/issues/5256) and [CUPS AppS
 | Lower `HPRT_GAP_MS` / unpaced writes | –                           | The printer's credits set the rate; unpaced writes overflow it             |
 | Crop or compress the bitmap          | ~1.5–3× less data           | Changes the job the driver produced; not reliable enough                   |
 | Keep the BLE link open after a job   | ~0.6 s per back-to-back job | Too little gain; blocks phones, the app's Chrome button and other accounts |
+| Shorter drain / close TCP early      | 0.5 s per back-to-back job  | Risk losing end of job. Figure of 0.5s is a chosen safety margine.         |
 
 ### Re-measuring
 
@@ -215,26 +216,26 @@ sudo cupsctl --no-debug-logging
 
 ## 6. Limitations and hazards
 
-| Issue                                                  | Effect                                              | Mitigation                                                                              |
-| ------------------------------------------------------ | --------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| CUPS completes the job once the bridge has received it | Bluetooth failures don't show in the print queue    | Check `/tmp/hprt-ble-bridge.log`. Possible improvement: retry plus a macOS notification |
-| Printer error states (red light: cover open, no paper) | Printer doesn't advertise or print; the job is lost | Fix the printer, then reprint                                                           |
-| A mid-job disconnect                                   | Printer stops advertising                           | Power-cycle the printer                                                                 |
-| Single BLE connection                                  | A connected phone app blocks the Mac                | Close phone apps                                                                        |
-| Bridge runs per user, on port 9100                     | Only one logged-in user's bridge can bind the port  | Fine for a single-user Mac                                                              |
-| Rebuilt binary has a new signature                     | TCC may ask for Bluetooth permission again          | Re-allow under Privacy & Security → Bluetooth                                           |
+| Issue                                                  | Effect                                                                                                | Mitigation                                                                                             |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| CUPS completes the job once the bridge has received it | Bluetooth failures don't show in the print queue                                                      | Check `~/Library/Logs/hprt-ble-bridge-XXXX.log`. Possible improvement: retry plus a macOS notification |
+| Printer error states (red light: cover open, no paper) | Printer doesn't advertise or print; the job is lost                                                   | Fix the printer, then reprint                                                                          |
+| A mid-job disconnect                                   | Printer stops advertising                                                                             | Power-cycle the printer                                                                                |
+| Single BLE connection                                  | A connected phone app blocks the Mac                                                                  | Close phone apps                                                                                       |
+| Bridges run per user; one port per printer             | On a shared Mac only one logged-in user's bridge can bind a given port (others log `FATAL` and retry) | Fine for sequential logins; concurrent fast user switching is untested                                 |
+| Rebuilt binary has a new signature                     | TCC may ask for Bluetooth permission again                                                            | Re-allow under Privacy & Security → Bluetooth                                                          |
 
 ## 7. Files
 
-| Path                                                        | Purpose                                                   |
-| ----------------------------------------------------------- | --------------------------------------------------------- |
-| `~/src/hprt-ble-bridge/main.swift`                          | Bridge source (`send <file>` for tests, `serve` for CUPS) |
-| `~/src/hprt-ble-bridge/Info.plist`                          | Bluetooth usage text, embedded in the binary              |
-| `~/bin/hprt-ble-bridge`                                     | Compiled bridge                                           |
-| `~/Library/LaunchAgents/local.<user>.hprt-ble-bridge.plist` | Autostart at login, `KeepAlive`, settings                 |
-| `/tmp/hprt-ble-bridge.log`                                  | Log                                                       |
-| `/tmp/hprt-last-job.bin`                                    | Copy of the last job received from CUPS                   |
-| CUPS queue `HPRT_D35BT_BT`                                  | HPRT PPD + `socket://127.0.0.1:9100`                      |
+| Path                                                      | Purpose                                                        |
+| --------------------------------------------------------- | -------------------------------------------------------------- |
+| `~/src/hprt-ble-bridge/main.swift`                        | Bridge source (`send <file>` for tests, `serve` for CUPS)      |
+| `~/src/hprt-ble-bridge/Info.plist`                        | Bluetooth usage text, embedded in the binary                   |
+| `~/bin/hprt-ble-bridge`                                   | Compiled bridge, shared by all printers                        |
+| `~/Library/LaunchAgents/local.hprt-ble-bridge.XXXX.plist` | One per printer: autostart at login, `KeepAlive`, settings     |
+| `~/Library/Logs/hprt-ble-bridge-XXXX.log`                 | Log, one per printer (also visible in Console.app)             |
+| `~/Library/Logs/hprt-last-job-PORT.bin`                   | Copy of the last job received from CUPS, one per port          |
+| CUPS queue `HPRT_D35BT_XXXX`                              | HPRT PPD + `socket://127.0.0.1:PORT/?snmp=false` (system-wide) |
 
 ## 8. References
 
@@ -246,7 +247,6 @@ sudo cupsctl --no-debug-logging
   [`maximumWriteValueLength(for:)`](https://developer.apple.com/documentation/corebluetooth/cbperipheral/maximumwritevaluelength(for:)) ·
   [`canSendWriteWithoutResponse`](https://developer.apple.com/documentation/corebluetooth/cbperipheral/cansendwritewithoutresponse) ·
   [`NSBluetoothAlwaysUsageDescription`](https://developer.apple.com/documentation/bundleresources/information-property-list/nsbluetoothalwaysusagedescription) ·
-  [`NWListener`](https://developer.apple.com/documentation/network/nwlistener) ·
   [launchd jobs](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html)
 - HPRT: [downloads](https://download.hprt.com/Downloads.html) ·
   [D35 user manual (EN)](https://shop.ribbon.ua/uploads/instructions/2438/ribbonua_hprt_sl32_series_label_printer_user_manual_en.pdf) ·

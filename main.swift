@@ -22,6 +22,7 @@ let flow       = env["HPRT_FLOW"] ?? "delay"               // delay | paced | cr
 let chunkCap   = Int(env["HPRT_CHUNK"] ?? "") ?? 100
 let delayMs    = Int(env["HPRT_DELAY_MS"] ?? "") ?? 20
 let legacyGapMs = Int(env["HPRT_GAP_MS"] ?? "") ?? 8       // credit mode on macOS < 10.13 only
+let drainMs    = max(0, Int(env["HPRT_DRAIN_MS"] ?? "") ?? 50)      // drain wait to preserve end of job
 let verbose    = env["HPRT_VERBOSE"] == "1"
 let statusUUID = CBUUID(string: "FF03")
 let serviceUUIDs = ["FF00", "49535343-FE7D-4AE5-8FA9-9FAFD205E455", "FFE0", "18F0"].map(CBUUID.init(string:))
@@ -183,8 +184,9 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     draining = true
     let secs = Date().timeIntervalSince(started)
     log(String(format: "sent %d B in %.1f s (%d writes, %d credits granted)", payload.count, secs, writes, granted))
+    log("drain \(drainMs) ms")
     let myJob = job
-    q.asyncAfter(deadline: .now() + 1.5) { if self.job == myJob { self.finish(nil) } }  // let printer drain
+    q.asyncAfter(deadline: .now() + .milliseconds(drainMs)) { if self.job == myJob { self.finish(nil) } }  // let printer drain
   }
 
   // ---- printer status ----
@@ -263,7 +265,7 @@ if args.count >= 3 && args[1] == "send" {                      // one-shot test
 } else if args.count >= 2 && args[1] == "serve" {              // CUPS bridge
   signal(SIGPIPE, SIG_IGN)
   let fd = listenLoopback(listenPort)                          // exits with FATAL if the port is taken
-  log("listening on 127.0.0.1:\(listenPort) for \(targetName) (flow \(flow), chunk \(chunkCap), delay \(delayMs) ms)")
+  log("listening on 127.0.0.1:\(listenPort) for \(targetName) (flow \(flow), chunk \(chunkCap), delay \(delayMs) ms), drain \(drainMs) ms")
   DispatchQueue(label: "accept").async {                       // one job at a time
     while true {
       let c = accept(fd, nil, nil)

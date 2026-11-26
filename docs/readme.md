@@ -14,12 +14,12 @@ Background and design: see [TECHNICAL.md](TECHNICAL.md).
 
 ## Requirements
 
-| Item | Notes |
-|---|---|
-| Mac with Bluetooth LE | Any recent Mac (Intel or Apple Silicon) |
-| Admin rights | Needed once, for `lpadmin` (creating the print queue) |
+| Item                   | Notes                                                                       |
+| ---------------------- | --------------------------------------------------------------------------- |
+| Mac with Bluetooth LE  | Any recent Mac (Intel or Apple Silicon)                                     |
+| Admin rights           | Needed once, for `lpadmin` (creating the print queue)                       |
 | HPRT D35BT, powered on | No other bluetooth devices (i.e. mobile phone) connected to it during setup |
-| This repo | `main.swift`, `Info.plist`, `install.sh` |
+| This repo              | `main.swift`, `Info.plist`, `install.sh`                                    |
 
 ---
 
@@ -78,17 +78,19 @@ sh install.sh 5676 9101
 
 What it does:
 
-| Stage | Action |
-|---|---|
-| 1/4 | Compiles `~/bin/hprt-ble-bridge`, with the Bluetooth usage text embedded |
-| 2/4 | Stops any running bridge, then sends a tiny test job over BLE. The printer **feeds one blank label**, and macOS asks **Terminal** for Bluetooth permission: click **Allow** |
-| 3/4 | Installs and starts the LaunchAgent `~/Library/LaunchAgents/local.<user>.hprt-ble-bridge.plist` |
-| 4/4 | Creates the CUPS queue `HPRT_D35BT_BT` → `socket://127.0.0.1:9100` (asks for your password) |
+| Stage | Action                                                                                                                                                                      |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1/4   | Compiles `~/bin/hprt-ble-bridge`, with the Bluetooth usage text embedded                                                                                                    |
+| 2/4   | Stops any running bridge, then sends a tiny test job over BLE. The printer **feeds one blank label**, and macOS asks **Terminal** for Bluetooth permission: click **Allow** |
+| 3/4   | Installs and starts the LaunchAgent `~/Library/LaunchAgents/local.hprt-ble-bridge.XXXX.plist`, logging to `~/Library/Logs/hprt-ble-bridge-XXXX.log`                         |
+| 4/4   | Creates the CUPS queue `HPRT_D35BT_XXXX` → `socket://127.0.0.1:PORT/?snmp=false` (a macOS admin dialog asks for an administrator's name and password)                       |
 
 Re-running the script is safe. It rebuilds the binary and replaces the agent and the queue.
 
 On port collision (installing multiple bridges on the same port), the installation simply fails.
 [Uninstall the existing bridge](#uninstall), then run the installation again.
+
+**The bridge installation is per account**. Install the bridge for each individual account.
 
 ## Step 6 – Grant Bluetooth permission to the bridge (if asked)
 
@@ -111,7 +113,7 @@ open **System Settings → Privacy & Security → Bluetooth** and enable `hprt-b
 ## Step 8 – Test
 
 ```sh
-tail -f /tmp/hprt-ble-bridge.log
+tail -f ~/Library/Logs/hprt-ble-bridge-B3F8.log      # XXXX = your printer id
 ```
 
 Print a page with large black text, for example [sample.html](/sample.html).
@@ -135,26 +137,26 @@ Expected log:
 
 ## Troubleshooting
 
-| Symptom | Fix |
-|---|---|
-| Log: `scanning…` → `timeout … not found` | Printer off, asleep, stuck, or connected to a phone. **Power-cycle the printer**, close phone apps, and print again |
-| Log: `bluetooth state: 3` | Grant Bluetooth permission (Step 6). This is needed again after rebuilding the binary |
-| Blank label | Run `LC_ALL=C tr -d '\000' < /tmp/hprt-last-job.bin \| wc -c`. A value around **57** means the page image was empty: check "Shrink To Fit Page Width" and the paper size |
-| Log: `refusing … not printer data` | The queue isn't using the HPRT driver. Re-run `install.sh` |
-| Log: `no FF03 credits within 3 s` | Different firmware. Set `HPRT_FLOW` to `delay` in the plist (slower, ~30 s), then `bootout` + `bootstrap` |
-| Nothing in the log at all | Bridge not running: `launchctl print gui/$(id -u)/local.$(id -un).hprt-ble-bridge \| grep state` |
-| Job shows "completed" but nothing printed | Known limitation: CUPS doesn't see Bluetooth failures. Check the log and reprint |
+| Symptom                                   | Fix                                                                                                                                                                                                 |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Log: `scanning…` → `timeout … not found`  | Printer off, asleep, stuck, or connected to a phone. **Power-cycle the printer**, close phone apps, and print again                                                                                 |
+| Log: `bluetooth state: 3`                 | Grant Bluetooth permission (Step 6). This is needed again after rebuilding the binary                                                                                                               |
+| Blank label                               | Run `LC_ALL=C tr -d '\000' < ~/Library/Logs/hprt-last-job-9100.bin \| wc -c` (use your port). A value around 57 means the page image was empty: check "Shrink To Fit Page Width" and the paper size |
+| Log: `refusing … not printer data`        | The queue isn't using the HPRT driver. Re-run `install.sh`                                                                                                                                          |
+| Log: `no FF03 credits within 3 s`         | Different firmware. Set `HPRT_FLOW` to `delay` in the plist (slower, ~30 s), then `bootout` + `bootstrap`                                                                                           |
+| Nothing in the log at all                 | Bridge not running: `launchctl print gui/$(id -u)/local.hprt-ble-bridge.XXXX \| grep state`                                                                                                         |
+| Job shows "completed" but nothing printed | Known limitation: CUPS doesn't see Bluetooth failures. Check the log and reprint                                                                                                                    |
 
 ### Printer indicator (from the HPRT D35 manual §3.4.2)
 
-| Light | Meaning | Fix |
-|---|---|---|
-| Blue, steady | Ready | – |
-| Red, steady | Cover not closed | Press the cover down until it clicks |
-| Red, slow blink | Out of paper / no label | Reload the roll and set the guides |
-| Red, fast blink | Label calibration failed | Hold FEED ~3 s (2 flashes) to recalibrate for gap labels |
-| Orange, slow blink | Jam / label came off the backing | Clear the paper path |
-| Purple | Print head too hot | Let it cool |
+| Light              | Meaning                          | Fix                                                      |
+| ------------------ | -------------------------------- | -------------------------------------------------------- |
+| Blue, steady       | Ready                            | –                                                        |
+| Red, steady        | Cover not closed                 | Press the cover down until it clicks                     |
+| Red, slow blink    | Out of paper / no label          | Reload the roll and set the guides                       |
+| Red, fast blink    | Label calibration failed         | Hold FEED ~3 s (2 flashes) to recalibrate for gap labels |
+| Orange, slow blink | Jam / label came off the backing | Clear the paper path                                     |
+| Purple             | Print head too hot               | Let it cool                                              |
 
 Jobs sent while the light is red are **lost**, so reprint them.
 
@@ -166,8 +168,8 @@ Jobs sent while the light is red are **lost**, so reprint them.
 lpstat -v | grep D35BT
 
 # e.g.
-# device for HPRT_D35BT_5676: socket://127.0.0.1:9101
-# device for HPRT_D35BT_B3F8: socket://127.0.0.1:9100
+# device for HPRT_D35BT_5676: socket://127.0.0.1:9101/?snmp=false
+# device for HPRT_D35BT_B3F8: socket://127.0.0.1:9100/?snmp=false
 ```
 
 ### logging
@@ -182,7 +184,7 @@ less +F ~/Library/Logs/hprt-ble-bridge-*.log
 ### Rebuild binary
 
 ```sh
-LABEL="local.$(id -un).hprt-ble-bridge"
+LABEL="local.hprt-ble-bridge.XXXX"            # XXXX = printer id
 
 # After editing main.swift: rebuild + restart (plist unchanged)
 swiftc -O main.swift -o ~/bin/hprt-ble-bridge \
@@ -198,9 +200,9 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/$LABEL.plist
 
 Each printer has its own bridge and queue:
 
-| Printer | Queue | LaunchAgent | Port | Log |
-|---|---|---|---|---|
-| `D35BT-XXXX` | `HPRT_D35BT_XXXX` | `local.hprt-ble-bridge.XXXX` | 9100, 9101, … | `/tmp/hprt-ble-bridge-XXXX.log` |
+| Printer      | Queue             | LaunchAgent                  | Port          | Log                                       |
+| ------------ | ----------------- | ---------------------------- | ------------- | ----------------------------------------- |
+| `D35BT-XXXX` | `HPRT_D35BT_XXXX` | `local.hprt-ble-bridge.XXXX` | 9100, 9101, … | `~/Library/Logs/hprt-ble-bridge-XXXX.log` |
 
 The binary `~/bin/hprt-ble-bridge` is shared by all printers.
 The HPRT driver and any **USB queue** are left untouched.
@@ -209,11 +211,14 @@ The HPRT driver and any **USB queue** are left untouched.
 
 ```sh
 SUFFIX=5676                                   # last 4 hex of the printer to remove
+PORT=9101                                     # its port
 LABEL="local.hprt-ble-bridge.$SUFFIX"
 
 launchctl bootout gui/$(id -u)/$LABEL 2>/dev/null
-rm -f ~/Library/LaunchAgents/$LABEL.plist /tmp/hprt-ble-bridge-$SUFFIX.log
-sudo lpadmin -x "HPRT_D35BT_$SUFFIX"
+rm -f ~/Library/LaunchAgents/$LABEL.plist \
+      ~/Library/Logs/hprt-ble-bridge-$SUFFIX.log \
+      ~/Library/Logs/hprt-last-job-$PORT.bin
+sudo lpadmin -x "HPRT_D35BT_$SUFFIX"          # admin account; a standard account can't use sudo
 
 lpstat -v | grep D35BT                        # queue gone, others unchanged
 ```
@@ -225,20 +230,22 @@ The other printers keep working. Their ports don't change.
 Remove all printers and print queues.
 
 ```sh
-sh ./uninstall.sh
+sh ./uninstall.sh XXXX|--all [--queue]
 ```
 
 ---
 
 ## Bridge settings (plist `EnvironmentVariables`)
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `HPRT_NAME` | `D35BT-B3F8` | Exact BLE name, case-sensitive |
-| `HPRT_FLOW` | `delay` (`install.sh` sets `credit`) | `credit` = printer-driven flow control (~5 s), `delay` = acknowledge + pause (~30 s), `paced` = fixed pause, no acknowledgement |
-| `HPRT_CHUNK` | `100` | Max bytes per BLE write. The printer itself caps this at 100 |
-| `HPRT_DELAY_MS` | `20` | Pause per write in `delay`/`paced` modes |
-| `HPRT_VERBOSE` | off | `1` logs every characteristic and credit |
+| Variable        | Default                              | Meaning                                                                                                                         |
+| --------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `HPRT_NAME`     | `D35BT-B3F8`                         | Exact BLE name, case-sensitive                                                                                                  |
+| `HPRT_PORT`     | `9100`                               | TCP port on 127.0.0.1 that CUPS connects to; must match the queue URI                                                           |
+| `HPRT_FLOW`     | `delay` (`install.sh` sets `credit`) | `credit` = printer-driven flow control (~5 s), `delay` = acknowledge + pause (~30 s), `paced` = fixed pause, no acknowledgement |
+| `HPRT_CHUNK`    | `100`                                | Max bytes per BLE write. The printer itself caps this at 100                                                                    |
+| `HPRT_DELAY_MS` | `20`                                 | Pause per write in `delay`/`paced` modes                                                                                        |
+| `HPRT_VERBOSE`  | off                                  | `1` logs every characteristic and credit                                                                                        |
+| `HPRT_DRAIN_MS` | `50`                                 | Drain time (ms) between jobs. Ensures end of job is not lost.                                                                   |
 
 ## References
 
