@@ -79,7 +79,6 @@ cat > "$PLIST" <<EOF
     <key>HPRT_NAME</key><string>$NAME</string>
     <key>HPRT_PORT</key><string>$PORT</string>
     <key>HPRT_FLOW</key><string>credit</string>
-    <key>HPRT_DRAIN_MS</key><string>250</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

@@ -246,6 +246,7 @@ sh ./uninstall.sh XXXX|--all [--queue]
 | `HPRT_DELAY_MS` | `20`                                 | Pause per write in `delay`/`paced` modes                                                                                        |
 | `HPRT_VERBOSE`  | off                                  | `1` logs every characteristic and credit                                                                                        |
 | `HPRT_DRAIN_MS` | `250`                                | Drain time (ms) between jobs. Ensures end of job is not lost.                                                                   |
+| `HPRT_MERGE`    | on                                   | Merges byte-identical consecutive labels into one CPCL label with quantity N. 0 = off                                           |
 
 ## References
 

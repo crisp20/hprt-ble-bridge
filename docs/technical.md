@@ -69,6 +69,7 @@ The `Info.plist` is embedded into the binary (`-sectcreate __TEXT __info_plist`)
 
 ```
 CUPS connects to :PORT ─► receive whole job ─► sanity check (refuse %!PS / %PDF / empty)
+      │                                        merge identical consecutive labels (qty N)
       │                                        save copy to ~/Library/Logs/hprt-last-job-PORT.bin
       ▼
 scan for exact name "D35BT-XXXX" ─► connect ─► discover services
@@ -77,7 +78,7 @@ subscribe FF01 / FF03 (status) ─► printer announces max packet + initial cre
       ▼
 write job to FF02 in ≤100 B packets, one packet per credit
       ▼
-wait 250ms (printer drains) ─► disconnect ─► close TCP ─► CUPS marks job done
+wait for printer drain (tested between 50~250ms, default is 250ms) ─► disconnect ─► close TCP ─► CUPS marks job done
 ```
 
 Design choices:
@@ -109,11 +110,11 @@ It was confirmed empirically: every job showed *writes = credits granted* (198/1
 
 ```
 512 × 0x00                 padding / buffer flush
-! 0 203 203 320 1          CPCL header: 203 dpi, label height 320 dots (40 mm), 1 copy
-PW 480                     print width 480 dots (60 mm)
+! 0 203 203 320 1 CRLF     CPCL header: 203 dpi, label height 320 dots (40 mm), 1 copy
+PW 480 CRLF                print width 480 dots (60 mm)
 CG 60 320 0 0 <19200 B>    uncompressed 1-bit bitmap: 60 bytes × 320 rows
-FORM                       feed to the next gap
-PRINT
+FORM CRLF                  feed to the next gap
+PRINT CRLF
 ```
 
 A 60×40 mm label is therefore **~19.7 KB regardless of content**,
@@ -130,16 +131,16 @@ click Print (system print dialog)
   │ 2) CUPS filters: cgpdftoraster → raster-cpcl          <1 s
   │    socket backend connects to 127.0.0.1:PORT          ~0 s (was ~4 s, see "snmp=false" below)
   ▼
-bridge: "job received"                                <--------------------------------------------\
-  │ 3)  BLE connect + service discovery + subscribe       ~0.6 s                                   |
-  ▼                                                                                                |
-bridge: "writing N B"                                                                              |
-  │ 4)  BLE transfer, printer-paced (~4.3 KB/s)           ~4.6 s per label in job (19.5 KB)        |
-  ▼                                                                                                |
-bridge: "sent N B in X s"     ← printer is already printing/feeding (same as USB)                  |
-  │ 5)  static drain wait, disconnect                     250ms delay for next job in queue        |
-  ▼                                                                                                |
-bridge: "job done" → CUPS marks the job complete      --- subsequent queued jobs ------------------/
+bridge: "job received"                                <---------------------------------------------\
+  │ 3)  BLE connect + service discovery + subscribe       ~0.6 s                                    |
+  ▼                                                                                                 |
+bridge: "writing N B"                                                                               |
+  │ 4)  BLE transfer, printer-paced (~4.3 KB/s)           ~4.6 s per (UNIQUE) label in job (19.5 KB)|
+  ▼                                                                                                 |
+bridge: "sent N B in X s"     ← printer is already printing/feeding (same as USB)                   |
+  │ 5)  static drain wait, disconnect                     250ms delay for next job in queue         |
+  ▼                                                                                                 |
+bridge: "job done" → CUPS marks the job complete      --- subsequent queued jobs -------------------/
 ```
 
 ### Print time: BLE vs USB (60 × 40 mm labels)
@@ -177,11 +178,12 @@ Bluetooth transfer (per label):
 
 End to end (2 labels, click → last byte sent):
 
-| Step | Change                                          | Saved  | Total       |
-| ---- | ----------------------------------------------- | ------ | ----------- |
-| 0    | First working bridge, `delay` 100 B / 20 ms     | –      | ~66 s*      |
-| 1    | `credit` flow control                           | ~51 s  | ~16 s       |
-| 2    | Queue URI `socket://127.0.0.1:PORT/?snmp=false` | ~3–4 s | **~11.5 s** |
+| Step     | Change                                          | Saved  | Total       |
+| -------- | ----------------------------------------------- | ------ | ----------- |
+| Baseline | USB direct connection                           | –      | 9.3 seconds |
+| 0        | First working bridge, `delay` 100 B / 20 ms     | –      | ~66 s*      |
+| 1        | `credit` flow control                           | ~51 s  | ~16 s       |
+| 2        | Queue URI `socket://127.0.0.1:PORT/?snmp=false` | ~3–4 s | **~11.5 s** |
 
 \* Estimated from ~30 s per label in `delay` mode. Steps 1–2 are measured.
 
@@ -190,6 +192,10 @@ the CUPS socket backend sends an SNMP supply-level query to the device address a
 Nothing answers SNMP on `127.0.0.1`, so every job waited for nothing.
 The URI option needs the `/` before the `?`: `socket://127.0.0.1:9100?snmp=false` is rejected as `Bad device-uri`.
 See [apple/cups #5256](https://github.com/apple/cups/issues/5256) and [CUPS AppSocket](https://www.cups.org/doc/network.html#SOCKET).
+
+**Identical copies**: for batches of identical labels,
+the data are deduplicated and sent as a single label + a copy count,
+thereby only costing one label transfer time.
 
 ### Considered and rejected
 
