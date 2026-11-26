@@ -90,7 +90,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
         case 3:    log("bluetooth state: 3 (unauthorized) - allow Bluetooth for hprt-ble-bridge in Privacy settings")
         case 4:    log("bluetooth state: 4 (powered off) - turn Bluetooth on; the bridge resumes by itself")
         case 0, 1: log("bluetooth state: \(s) (\(s == 0 ? "unknown" : "resetting"), waiting)")
-        default:   log("bluetooth state: \(s)  (5 = poweredOn)")
+        default:   log("bluetooth state: \(s) (5 = poweredOn)")
       }
       if s == poweredOn && pendingStart { pendingStart = false; findPeripheral() }
   }
@@ -367,6 +367,7 @@ if args.count >= 3 && args[1] == "send" {                      // one-shot test
     while true {
       let c = accept(fd, nil, nil)
       if c < 0 { if errno == EINTR { continue }; fatal("accept(): \(errnoText())") }
+      log("connection accepted")
       var tv = timeval(tv_sec: 60, tv_usec: 0)                 // don't hang forever on a stalled sender
       _ = setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
       guard let data = readAll(c) else { close(c); continue }

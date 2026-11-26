@@ -38,10 +38,17 @@ The install script creates the Bluetooth queue directly from the installed drive
 
 ## Step 2 – Install the Xcode Command Line Tools
 
-The bridge is compiled locally with `swiftc`.
+The bridge is compiled locally with `swiftc`. Install the Command Line Tools:
 
 ```sh
-xcode-select --install        # skip if `swiftc --version` already works
+# swiftc --version to check if already installed
+# otherwise, run:
+xcode-select --install
+```
+
+```sh
+# ...or already installed but pointing to an incorrect directory, in which case:
+osascript -e 'do shell script "/usr/bin/xcode-select --switch /Library/Developer/CommandLineTools" with administrator privileges'
 ```
 
 ## Step 3 – Find the printer's Bluetooth name
@@ -100,20 +107,30 @@ open **System Settings -> Privacy & Security -> Bluetooth** and enable `hprt-ble
 
 ## Step 7 – Paper size and print preset (one-time)
 
-1. In any print dialog:
-   **Paper Size -> Manage Custom Sizes… -> +**, then set width **60 mm**, height **40 mm**, all margins **0**. 
-   Name it e.g. **Small Label**. (The HPRT driver has no 60×40 preset.)
-2. In the print dialog, choose:
-   - Printer: **HPRT D35BT (Bluetooth)**
+Associate the desired print size and setting to this printer.
+
+In any print dialog:
+1. Choose:
+   - Paper Size: **Manage Custom Sizes… -> +**
+   - Set width **60 mm**, height **40 mm**, all margins **0**
+   - Name it e.g. **Small Label**
+2. Choose:
+   - Printer: **HPRT D35BT XXXX (Bluetooth)**
    - Paper Size: **Small Label**
+   - Orientation: **Portrait**
    - Check ✅: **Ignore Scaling and Shrink To Fit Page Width**
    - Page Headers / Footers: all six **--blank--**
-3. **Presets -> Save Current Settings as Preset… -> "D35BT label"**.
+3. **Presets -> Save Current Settings as Preset…:**.
+   - Preset Name: **"D35BT label"**
+   - Available For: **HPRT D34BT XXXX**
+   - Type: **Print Job Preset**
 
 ## Step 8 – Test
 
 ```sh
-tail -f ~/Library/Logs/hprt-ble-bridge-B3F8.log      # XXXX = your printer id
+tail -f ~/Library/Logs/hprt-ble-bridge-*.log
+# or
+less +F ~/Library/Logs/hprt-ble-bridge-*.log
 ```
 
 Print a page with large black text, for example [sample.html](/sample.html).
