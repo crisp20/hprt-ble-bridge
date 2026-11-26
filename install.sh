@@ -1,5 +1,9 @@
 #!/bin/bash
-# Usage: sh install.sh XXXX [PORT]     e.g.  sh install.sh B3F8 9100 ; sh install.sh 5676 9101
+# Install the Bluetooth bridge for one HPRT D35BT printer for the CURRENT macOS user.
+# Usage:  sh install.sh XXXX [PORT]      e.g.  sh install.sh B3F8 9100 ; sh install.sh 5676 9101
+#   XXXX = last 4 hex digits of BT_MAC on the printer's self-test label (or the full D35BT-XXXX name)
+# Run as a normal user (no sudo). An admin dialog appears only if the shared CUPS queue must be created.
+# Every account that prints on this Mac runs this once. Works on macOS 10.12+ (bash 3.2).
 set -euo pipefail
 
 ARG="${1:?usage: $0 XXXX|D35BT-XXXX [PORT]   (last 4 hex of BT_MAC on the self-test label)}"
@@ -7,39 +11,62 @@ ARG="$(printf '%s' "$ARG" | tr '[:lower:]' '[:upper:]')"
 case "$ARG" in D35BT-*) NAME="$ARG" ;; *) NAME="D35BT-$ARG" ;; esac
 SUFFIX="${NAME#D35BT-}"
 PORT="${2:-9100}"
+case "$PORT" in ''|*[!0-9]*) echo "PORT must be a number, e.g. 9100"; exit 1 ;; esac
+[ "$PORT" -ge 1024 ] && [ "$PORT" -le 65535 ] || { echo "PORT must be 1024-65535"; exit 1; }
 
+UIDN="$(id -u)"
 QUEUE="HPRT_D35BT_$SUFFIX"
 LABEL="local.hprt-ble-bridge.$SUFFIX"
 BIN="$HOME/bin/hprt-ble-bridge"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-LOG="/tmp/hprt-ble-bridge-$SUFFIX.log"
+AGENTS="$HOME/Library/LaunchAgents"
+PLIST="$AGENTS/$LABEL.plist"
+LOGDIR="$HOME/Library/Logs"
+LOG="$LOGDIR/hprt-ble-bridge-$SUFFIX.log"
 SRC="$(cd "$(dirname "$0")" && pwd)"
-echo "Printer: $NAME   port: $PORT   queue: $QUEUE"
+PB=/usr/libexec/PlistBuddy
+echo "Printer: $NAME   port: $PORT   queue: $QUEUE   user: $(id -un)"
 
+# ---- 0. preflight ----
+[ "$UIDN" -ne 0 ] || { echo "Do not run with sudo/as root: the bridge must belong to the logged-in user."; exit 1; }
+command -v swiftc >/dev/null 2>&1 || { echo "swiftc not found: install Command Line Tools (xcode-select --install)"; exit 1; }
+[ -f "$SRC/main.swift" ] && [ -f "$SRC/Info.plist" ] || { echo "main.swift / Info.plist not found in $SRC"; exit 1; }
 grep -q 'HPRT_PORT' "$SRC/main.swift" || { echo "main.swift lacks HPRT_PORT support"; exit 1; }
 
-echo "== 1/4 build bridge"
-mkdir -p "$HOME/bin" "$HOME/Library/LaunchAgents"
-swiftc -O "$SRC/main.swift" -o "$BIN" \
-  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$SRC/Info.plist"
+# Another printer's agent of THIS user configured for the same port (even if it is not running right now)?
+for p in "$AGENTS"/local.hprt-ble-bridge.*.plist; do
+  [ -e "$p" ] || continue
+  [ "$p" = "$PLIST" ] && continue
+  other="$("$PB" -c 'Print :EnvironmentVariables:HPRT_PORT' "$p" 2>/dev/null || true)"
+  if [ "$other" = "$PORT" ]; then
+    echo "Port $PORT is already assigned to $(basename "$p" .plist). Pick another port, e.g. $((PORT+1))."; exit 1
+  fi
+done
 
-echo "== 2/4 Bluetooth check (one blank label feeds)"
-# Refuse a port that's held by anything other than THIS printer's own bridge, before touching anything
-OWNPID="$(launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | awk '/^\tpid = / {print $3}' || true)"
+# Port held by anything other than THIS printer's own running bridge? Checked before touching anything.
+OWNPID="$(launchctl print "gui/$UIDN/$LABEL" 2>/dev/null | awk '/^\tpid = / {print $3}' || true)"
 HOLDERS="$(lsof -nP -t -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | grep -vx "${OWNPID:-none}" || true)"
 if [ -n "$HOLDERS" ]; then
-  echo "Port $PORT is already used by another bridge/process:"; lsof -nP -iTCP:"$PORT" -sTCP:LISTEN
-  echo "Pick another port, e.g. $((PORT+1))."; exit 1
+  echo "Port $PORT is already in use:"; lsof -nP -iTCP:"$PORT" -sTCP:LISTEN || true
+  echo "If another account is logged in on this Mac, its bridge may hold the port: log it out, or pick another port."
+  exit 1
 fi
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+
+echo "== 1/4 build bridge"
+mkdir -p "$HOME/bin" "$AGENTS" "$LOGDIR"
+swiftc -O "$SRC/main.swift" -o "$BIN.new" -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$SRC/Info.plist"
+mv -f "$BIN.new" "$BIN"                      # atomic swap: running bridges keep the old copy until restarted
+
+echo "== 2/4 Bluetooth check (one blank label feeds)"
+launchctl bootout "gui/$UIDN/$LABEL" 2>/dev/null || true
 sleep 1
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "Port $PORT is already used by another bridge/process:"; lsof -nP -iTCP:"$PORT" -sTCP:LISTEN
-  echo "Pick another port, e.g. $((PORT+1))."; exit 1
+  echo "Port $PORT is still in use:"; lsof -nP -iTCP:"$PORT" -sTCP:LISTEN || true; exit 1
 fi
-printf '! 0 200 200 80 1\r\nFORM\r\nPRINT\r\n' > /tmp/hprt-probe.cpcl
-HPRT_NAME="$NAME" HPRT_FLOW=delay "$BIN" send /tmp/hprt-probe.cpcl || {
-  echo "Probe failed: check the name, power-cycle the printer, close phone apps, re-run."; exit 1; }
+PROBE="$(mktemp -t hprt-probe)"
+trap 'rm -f "$PROBE"' EXIT
+printf '! 0 200 200 80 1\r\nFORM\r\nPRINT\r\n' > "$PROBE"
+echo "(macOS 10.15+: allow Bluetooth if asked)"
+HPRT_NAME="$NAME" HPRT_FLOW=delay "$BIN" send "$PROBE" || { echo "Probe failed: check the name, power-cycle the printer, close phone apps / other Bluetooth tabs, re-run."; exit 1; }
 
 echo "== 3/4 LaunchAgent $LABEL"
 cat > "$PLIST" <<EOF
@@ -52,20 +79,36 @@ cat > "$PLIST" <<EOF
     <key>HPRT_NAME</key><string>$NAME</string>
     <key>HPRT_PORT</key><string>$PORT</string>
     <key>HPRT_FLOW</key><string>credit</string>
+    <key>HPRT_DRAIN_MS</key><string>250</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardErrorPath</key><string>$LOG</string>
 </dict></plist>
 EOF
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+launchctl bootstrap "gui/$UIDN" "$PLIST"
 
-echo "== 4/4 CUPS queue $QUEUE"
-MODEL="$(lpinfo -m | grep -i 'd35bt' | head -1 | cut -d' ' -f1)"
-[ -n "$MODEL" ] || { echo "HPRT D35BT driver not found: install it from download.hprt.com"; exit 1; }
-sudo lpadmin -p "$QUEUE" -D "HPRT D35BT $SUFFIX (Bluetooth)" \
-  -v "socket://127.0.0.1:$PORT" -m "$MODEL" -o PageSize=Custom.60x40mm -E
-sudo cupsenable "$QUEUE"; sudo cupsaccept "$QUEUE"
+echo "== 4/4 CUPS queue $QUEUE (shared by all accounts)"
+if lpstat -v "$QUEUE" 2>/dev/null | grep -q "socket://127.0.0.1:$PORT/?snmp=false\$"; then
+  echo "queue already set up"
+else
+  MODEL="$(lpinfo -m | grep -i 'd35bt' | head -1 | cut -d' ' -f1)"
+  [ -n "$MODEL" ] || { echo "HPRT D35BT driver not found: an admin must install it from download.hprt.com"; exit 1; }
+  CMD="/usr/sbin/lpadmin -p '$QUEUE' -D 'HPRT D35BT $SUFFIX (Bluetooth)' -v 'socket://127.0.0.1:$PORT/?snmp=false' -m '$MODEL' -o PageSize=Custom.60x40mm -E && /usr/sbin/cupsenable '$QUEUE' && /usr/sbin/cupsaccept '$QUEUE'"
+  echo "Asking for an administrator to create the shared print queue…"
+  osascript -e "do shell script \"$CMD\" with administrator privileges" >/dev/null || {
+    echo "Admin step cancelled or failed: the bridge is installed, but the queue is not."
+    echo "Re-run this script and enter an administrator's name and password."; exit 1; }
+  echo "queue created"
+fi
 
-sleep 2; tail -2 "$LOG"
+# Restart this user's other bridges so they run the freshly built binary (do not run during a print job)
+for p in "$AGENTS"/local.hprt-ble-bridge.*.plist; do
+  [ -e "$p" ] || continue
+  l="$(basename "$p" .plist)"; [ "$l" = "$LABEL" ] && continue
+  launchctl kickstart -k "gui/$UIDN/$l" 2>/dev/null || true
+done
+
+sleep 2; tail -2 "$LOG" 2>/dev/null || true
 echo "Done. Print to 'HPRT D35BT $SUFFIX (Bluetooth)'."
+echo "Per account, once: create the 60 x 40 mm paper size (margins 0) and save Firefox print settings for this printer."
