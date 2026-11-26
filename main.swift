@@ -84,9 +84,17 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     log("connecting to \(p.name ?? "?")"); central.connect(p, options: nil)
   }
   func centralManagerDidUpdateState(_ c: CBCentralManager) {
-    log("bluetooth state: \(c.state.rawValue)  (5 = poweredOn, 3 = unauthorized)")
-    if c.state.rawValue == poweredOn && pendingStart { pendingStart = false; findPeripheral() }
+      let s = c.state.rawValue
+      switch s {
+        case 2:    log("bluetooth state: 2 (unsupported) - FATAL: this Mac has no Bluetooth LE. Needs a Bluetooth 4.0+ Mac or a USB BLE adapter (BCM20702).")
+        case 3:    log("bluetooth state: 3 (unauthorized) - allow Bluetooth for hprt-ble-bridge in Privacy settings")
+        case 4:    log("bluetooth state: 4 (powered off) - turn Bluetooth on; the bridge resumes by itself")
+        case 0, 1: log("bluetooth state: \(s) (\(s == 0 ? "unknown" : "resetting"), waiting)")
+        default:   log("bluetooth state: \(s)  (5 = poweredOn)")
+      }
+      if s == poweredOn && pendingStart { pendingStart = false; findPeripheral() }
   }
+
   func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral,
                       advertisementData ad: [String: Any], rssi: NSNumber) {
     guard ((ad[CBAdvertisementDataLocalNameKey] as? String) ?? p.name) == targetName else { return }
