@@ -13,18 +13,6 @@ let logFmt: DateFormatter = {
 func log(_ s: String) {
   FileHandle.standardError.write("\(logFmt.string(from: Date())) \(s)\n".data(using: .utf8)!)
 }
-func rotateLogIfNeeded() {
-  guard let path = logPath,
-        let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-        let size = (attrs[.size] as? NSNumber)?.intValue, size > logMaxBytes else { return }
-  fflush(stdout); fflush(stderr)
-  let old = path + ".bk"
-  unlink(old)                       // keep only one old copy
-  rename(path, old)
-  freopen(path, "a", stdout)        // point stdout/stderr at a fresh file
-  freopen(path, "a", stderr)
-  log("log rotated: previous \(size / 1024) KB moved to \(old)")
-}
 func errnoText() -> String { return String(cString: strerror(errno)) }
 func fatal(_ s: String) -> Never { log("FATAL: \(s)"); exit(1) }
 
@@ -46,6 +34,19 @@ let mergeCopies = env["HPRT_MERGE"] != "0"     // merge byte-identical consecuti
 let keepAliveMs = max(0, Int(env["HPRT_KEEPALIVE_MS"] ?? "") ?? 0)   // 0 = disconnect after every job (today)
 let logPath = ProcessInfo.processInfo.environment["HPRT_LOG"]          // set by the plist
 let logMaxBytes = (Int(ProcessInfo.processInfo.environment["HPRT_LOG_MAX_KB"] ?? "") ?? 1024) * 1024
+
+func rotateLogIfNeeded() {
+  guard let path = logPath,
+        let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+        let size = (attrs[.size] as? NSNumber)?.intValue, size > logMaxBytes else { return }
+  fflush(stdout); fflush(stderr)
+  let old = path + ".bk"
+  unlink(old)                       // keep only one old copy
+  rename(path, old)
+  freopen(path, "a", stdout)        // point stdout/stderr at a fresh file
+  freopen(path, "a", stderr)
+  log("log rotated: previous \(size / 1024) KB moved to \(old)")
+}
 
 final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
   private let q = DispatchQueue(label: "ble")
