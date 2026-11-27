@@ -97,50 +97,45 @@ sh -s -- <release name>
 Once run, an installation script be executed.
 
 Example:
-```
-curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | sh -s
-
-# ======================================================================================
-# downloads the source code
-# ======================================================================================
+```console
+# user executes the installation command
+foo@bar >_ curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | sh -s
 
 == downloading crisp20/hprt-ble-bridge v0.1.1
    26 KB
-
-# ========================================================================================
-# lists existing bridges from previous installations
-# option to perform a full uninstall at this point for a fresh installation
-# ========================================================================================
-
 == bridges already installed:
    B3F8
-Uninstall all of them first (fresh start)? [y/N] y                                        # answer 'y' / 'n', default 'n'
-                                                                                          # if will install bridges for multiple printer, answer 'n'
+
+# user is prompted the option to perform a full uninstall for a fresh installation
+# answer 'y' / 'n', default 'n'
+# if will install bridges for multiple printer, answer 'n'
+Uninstall all of them first (fresh start)? [y/N] y
 removed bridge local.hprt-ble-bridge.B3F8 (port 9100)
 removed binary, logs and Bluetooth permission for justin
 Kept shared queue(s) (other accounts may use them): HPRT_D35BT_B3F8
 Re-run with --queue to delete them.
 Done.
 
-# ========================================================================================
-# supply mandatory info about the installation
-# ========================================================================================
-
+# user is asked to supply the last 4 characters of the printer name
+# as well as the network port this bridge should run on
+# default port: 9100
+# the specific port does not matter, as long as it is not in use by another application
+# if it is in use, the script will simply prompt the next available port (i.e. 9101)
 Printer name is on the printer's label / self-test page, e.g. D35BT-ABCD → ABCD
-Printer (last 4 characters): B3F8                                                         # provide the last 4 characters of the printer name
-Port [9100]:                                                                              # specify which network port this bridge should run on
-                                                                                          # default: 9100, if occupied by another bridge / application then next avaliable one (9101, 9102, ...)
-Printer: D35BT-B3F8   port: 9100   queue: HPRT_D35BT_B3F8   user: <accoutn username>
+Printer (last 4 characters): B3F8
+Port [9100]:
+Printer: D35BT-B3F8   port: 9100   queue: HPRT_D35BT_B3F8   user: <account username>
 
-# ========================================================================================
-# installation begins
-# ========================================================================================
+# the bridge source code being compiled
+== 1/4 build bridge
 
-== 1/4 build bridge                                                                        # the bridge source code being compiled
+== 2/4 Bluetooth check (one blank label feeds)
 
-== 2/4 Bluetooth check (one blank label feeds)                                             # binary compiled, attempting a connection with the printer
-(macOS 10.15+: allow Bluetooth if asked)                                                   # program will ask for bluetooth permission - allow
-2026-11-27 17:11:36.339 +08:00 bluetooth state: 5 (5 = poweredOn)                          # expected state: 5, if otherwise, check the [Troubleshooting] section 
+# binary compiled, attempting a connection with the printer
+# program will ask for bluetooth permission - allow
+(macOS 10.15+: allow Bluetooth if asked)
+# expected bluetooth state: 5. If otherwise, check the [Troubleshooting] section                           
+2026-11-27 17:11:36.339 +08:00 bluetooth state: 5 (5 = poweredOn)
 2026-11-27 17:11:36.340 +08:00 scanning for D35BT-B3F8…
 2026-11-27 17:11:36.676 +08:00 connecting to D35BT-B3F8
 2026-11-27 17:11:37.494 +08:00 writing 31 B to FF02: flow delay, chunk ≤100 B, delay 20 ms
@@ -149,12 +144,15 @@ Printer: D35BT-B3F8   port: 9100   queue: HPRT_D35BT_B3F8   user: <accoutn usern
 2026-11-27 17:11:37.973 +08:00 drain 250 ms
 2026-11-27 17:11:38.234 +08:00 OK: sent 31 bytes
 
-# ========================================================================================
-# configure bridge settings
-# ========================================================================================
-
-== 3/4 LaunchAgent local.hprt-ble-bridge.B3F8                                              # It is highly recommended you leave the settings on the recommended values
-Bridge settings:                                                                           # unless you know what they do - reference [Bridge settings] section
+# user is shown the bridge settings
+# user can:
+#   1. use recommended settings (by answering 'r'), 
+#   2. customize the settings (by answering 'c', after editing user will asked to confirm again),
+#   3. accept the current settings (by answering 'y')
+# It is highly recommended you leave the settings on the recommended values
+# unless you know what they do - reference [Bridge settings] section
+== 3/4 LaunchAgent local.hprt-ble-bridge.B3F8
+Bridge settings:                                                                           
   HPRT_FLOW          credit  [recommend to leave as default]
   HPRT_CHUNK         100     [recommend to leave as default]
   HPRT_DELAY_MS      20      [recommend to leave as default]
@@ -165,21 +163,25 @@ Bridge settings:                                                                
   HPRT_KEEPALIVE_MS  30000   [can customize as desired]
   HPRT_VERBOSE       0       [can customize as desired]
   HPRT_LOG_MAX_KB    1024    [can customize as desired]
+Use these settings? [Y]es / [r]ecommended / [c]ustomise:
 
-# ========================================================================================
-# create print queue
-# ========================================================================================
-
+# program will ask for admin credentials to create the print queue
 == 4/4 CUPS queue HPRT_D35BT_B3F8 (shared by all accounts)
-Asking for an administrator to create the shared print queue…                              # program will ask for admin credentials to create the print queue
+Asking for an administrator to create the shared print queue…                              
 queue created
 
 2026-11-27 17:11:38.284 +08:00 listening on 127.0.0.1:9100 for D35BT-B3F8 (flow credit, chunk 100, delay 20 ms), drain 250 ms
 2026-11-27 17:11:38.312 +08:00 bluetooth state: 5 (5 = poweredOn)
 Done. Print to 'HPRT D35BT B3F8 (Bluetooth)'.
-Create the 60 x 40 mm paper size (margins 0) and save print settings for this printer.     # reminding user to create the printer settings - see the next step
-Install another printer on this Mac? [y/N] n                                               # if more bridges need to be installed, answer 'y'
-== done. Logs: ~/Library/Logs/hprt-ble-bridge-*.log                                        # logs for print bridges can be seen in these log files
+
+# reminding user to create the printer settings - see the next step
+Create the 60 x 40 mm paper size (margins 0) and save print settings for this printer.
+
+# if more bridges need to be installed, answer 'y'
+Install another printer on this Mac? [y/N] n
+
+# logs for print bridges can be seen in these log files
+== done. Logs: ~/Library/Logs/hprt-ble-bridge-*.log
 ```
 
 ### Step 5 – Paper size and print preset (one-time)
