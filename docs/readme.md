@@ -14,12 +14,21 @@ Background and design: see [TECHNICAL.md](TECHNICAL.md).
 
 ## Requirements
 
-| Item                   | Notes                                                                       |
-| ---------------------- | --------------------------------------------------------------------------- |
-| Mac with Bluetooth LE  | Any recent Mac (Intel or Apple Silicon)                                     |
-| Admin rights           | Needed once, for `lpadmin` (creating the print queue)                       |
-| HPRT D35BT, powered on | No other bluetooth devices (i.e. mobile phone) connected to it during setup |
-| This repo              | `main.swift`, `Info.plist`, `install.sh`                                    |
+| Item                               | Notes                                                                                      |
+| ---------------------------------- | ------------------------------------------------------------------------------------------ |
+| Hardware supporting Bluetooth LE   | \*                                                                                         |
+| macOS compatible with swift 4.0.3+ | This translates to 'macOS 10.12.X+'                                                        |
+| Admin rights                       | Needed once for creating the print queue (`lpadmin`)                                       |
+| HPRT D35BT printer                 | Powered on and no other bluetooth devices (i.e. mobile phone) connected to it during setup |
+
+\* Run the following command in a terminal:
+
+```sh
+system_profiler SPBluetoothDataType | grep -iE 'LMP Version|Low Energy|Chipset|Firmware'
+```
+
+If the output shows `Bluetooth Low Energy Supported: No`, then your machine's hardware is unsupported.
+Consider installing a **USB Bluetooth 4.0 adapter**.
 
 ---
 
@@ -29,27 +38,35 @@ Background and design: see [TECHNICAL.md](TECHNICAL.md).
 
 1. Download **"Mac Drivers for D35BT"** from <https://download.hprt.com/Downloads.html>.
 2. Run the installer.
-3. Verify:
+3. Verify installation:
    ```sh
    lpinfo -m | grep -i d35bt
    ```
    You should see at least one line (e.g. `… HPRT D35BT, 1.4.10`).
 
-You do **not** need to add a USB printer first. 
+You do **not** need to add a USB printer first.
 The install script creates the Bluetooth queue directly from the installed driver.
 
 ### Step 2 – Install the Xcode Command Line Tools
 
 The bridge is compiled locally with `swiftc`. Install the Command Line Tools:
 
+To verify installation:
 ```sh
-# to check if already installed
 swiftc --version 
 
-# if not installed, install with:
-xcode-select --install
+# expected output
+swift-driver version: <...> Apple Swift version: <...>
+Target: <...>
+```
 
-# or already installed but pointing to an incorrect directory, in which case:
+To install:
+```sh
+xcode-select --install
+```
+
+Already installed but pointing to an incorrect directory - to fix the targetted directory (requires admin):
+```sh
 osascript -e 'do shell script "/usr/bin/xcode-select --switch /Library/Developer/CommandLineTools" with administrator privileges'
 ```
 
@@ -57,29 +74,113 @@ osascript -e 'do shell script "/usr/bin/xcode-select --switch /Library/Developer
 
 1. Printer on, cover closed (it must **click**), light **blue**.
 2. **Hold FEED ~1.5 s** until the light flashes once, then release -> a self-test label prints.
-3. Read `BT_MAC`, e.g. `ba:ab:14:04:b3:f8`. The Bluetooth name is **`D35BT-` + the last 4 hex digits in uppercase**, so here it's `D35BT-B3F8`.
+3. Read `BT_MAC`. The Bluetooth name is **`D35BT-` + the last 4 hex digits in uppercase**. e.g. `BT_MAC: ba:ab:14:04:b3:f8` -> `D35BT-B3F8`.
 
-Pairing in System Settings -> Bluetooth is **not required**. BLE connects without pairing.
+Pairing in System Settings -> Bluetooth is **not required** for installation of the bridge.
 
 ### Step 4 – Run the install / uninstall script
 
 Run the following script in a terminal:
 
+For the latest stable release:
 ```sh
-# Production version
 curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | \
 sh
+```
 
-# Specific version
+For a specific release:
+```sh
 curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | \
 sh -s -- <release name>
 ```
 
-The script will ask:
- 1. Whether you want to uninstall existing bridges,
- 2. Whether you want to install new bridges, (and if so...)
- 3. info about the printer and installtion choices,
- 4. admin accounts & permission grants where necessary.
+Once run, an installation script be executed.
+
+Example:
+```
+curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | sh -s
+
+# ======================================================================================
+# downloads the source code
+# ======================================================================================
+
+== downloading crisp20/hprt-ble-bridge v0.1.1
+   26 KB
+
+# ========================================================================================
+# lists existing bridges from previous installations
+# option to perform a full uninstall at this point for a fresh installation
+# ========================================================================================
+
+== bridges already installed:
+   B3F8
+Uninstall all of them first (fresh start)? [y/N] y                                        # answer 'y' / 'n', default 'n'
+                                                                                          # if will install bridges for multiple printer, answer 'n'
+removed bridge local.hprt-ble-bridge.B3F8 (port 9100)
+removed binary, logs and Bluetooth permission for justin
+Kept shared queue(s) (other accounts may use them): HPRT_D35BT_B3F8
+Re-run with --queue to delete them.
+Done.
+
+# ========================================================================================
+# supply mandatory info about the installation
+# ========================================================================================
+
+Printer name is on the printer's label / self-test page, e.g. D35BT-ABCD → ABCD
+Printer (last 4 characters): B3F8                                                         # provide the last 4 characters of the printer name
+Port [9100]:                                                                              # specify which network port this bridge should run on
+                                                                                          # default: 9100, if occupied by another bridge / application then next avaliable one (9101, 9102, ...)
+Printer: D35BT-B3F8   port: 9100   queue: HPRT_D35BT_B3F8   user: <accoutn username>
+
+# ========================================================================================
+# installation begins
+# ========================================================================================
+
+== 1/4 build bridge                                                                        # the bridge source code being compiled
+
+== 2/4 Bluetooth check (one blank label feeds)                                             # binary compiled, attempting a connection with the printer
+(macOS 10.15+: allow Bluetooth if asked)                                                   # program will ask for bluetooth permission - allow
+2026-11-27 17:11:36.339 +08:00 bluetooth state: 5 (5 = poweredOn)                          # expected state: 5, if otherwise, check the [Troubleshooting] section 
+2026-11-27 17:11:36.340 +08:00 scanning for D35BT-B3F8…
+2026-11-27 17:11:36.676 +08:00 connecting to D35BT-B3F8
+2026-11-27 17:11:37.494 +08:00 writing 31 B to FF02: flow delay, chunk ≤100 B, delay 20 ms
+2026-11-27 17:11:37.917 +08:00   printer max packet: 100 B
+2026-11-27 17:11:37.973 +08:00 sent 31 B in 0.5 s (1 writes, 4 credits granted)
+2026-11-27 17:11:37.973 +08:00 drain 250 ms
+2026-11-27 17:11:38.234 +08:00 OK: sent 31 bytes
+
+# ========================================================================================
+# configure bridge settings
+# ========================================================================================
+
+== 3/4 LaunchAgent local.hprt-ble-bridge.B3F8                                              # It is highly recommended you leave the settings on the recommended values
+Bridge settings:                                                                           # unless you know what they do - reference [Bridge settings] section
+  HPRT_FLOW          credit  [recommend to leave as default]
+  HPRT_CHUNK         100     [recommend to leave as default]
+  HPRT_DELAY_MS      20      [recommend to leave as default]
+  HPRT_GAP_MS        8       [recommend to leave as default]
+  HPRT_DRAIN_MS      250     [recommend to leave as default]
+  HPRT_CHAR          (auto)  [recommend to leave as default]
+  HPRT_MERGE         1       [can customize as desired]
+  HPRT_KEEPALIVE_MS  30000   [can customize as desired]
+  HPRT_VERBOSE       0       [can customize as desired]
+  HPRT_LOG_MAX_KB    1024    [can customize as desired]
+
+# ========================================================================================
+# create print queue
+# ========================================================================================
+
+== 4/4 CUPS queue HPRT_D35BT_B3F8 (shared by all accounts)
+Asking for an administrator to create the shared print queue…                              # program will ask for admin credentials to create the print queue
+queue created
+
+2026-11-27 17:11:38.284 +08:00 listening on 127.0.0.1:9100 for D35BT-B3F8 (flow credit, chunk 100, delay 20 ms), drain 250 ms
+2026-11-27 17:11:38.312 +08:00 bluetooth state: 5 (5 = poweredOn)
+Done. Print to 'HPRT D35BT B3F8 (Bluetooth)'.
+Create the 60 x 40 mm paper size (margins 0) and save print settings for this printer.     # reminding user to create the printer settings - see the next step
+Install another printer on this Mac? [y/N] n                                               # if more bridges need to be installed, answer 'y'
+== done. Logs: ~/Library/Logs/hprt-ble-bridge-*.log                                        # logs for print bridges can be seen in these log files
+```
 
 ### Step 5 – Paper size and print preset (one-time)
 
@@ -213,7 +314,9 @@ lpstat -v | grep D35BT                        # queue gone, others unchanged
 
 ---
 
-## Bridge settings (plist `EnvironmentVariables`)
+## Bridge settings 
+
+plist `EnvironmentVariables`
 
 | Variable            | Default                              | Meaning                                                                                                                         |
 | ------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
