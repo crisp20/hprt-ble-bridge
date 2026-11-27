@@ -17,7 +17,7 @@ port_of() { "$PB" -c 'Print :EnvironmentVariables:HPRT_PORT' "$1" 2>/dev/null ||
 SUFFIX="${1:-}"
 if [ -z "$SUFFIX" ]; then
   has_tty || { echo "usage: sh install.sh XXXX [PORT]   (XXXX = last 4 of the printer name)" >&2; exit 2; }
-  echo "Printer name is on the printer's label / self-test page, e.g. D35BT-91DE → 91DE"
+  echo "Printer name is on the printer's label / self-test page, e.g. D35BT-ABCD → ABCD"
   SUFFIX="$(ask "Printer (last 4 characters):" "")"
 fi
 SUFFIX="$(printf '%s' "$SUFFIX" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]' | sed 's/^D35BT-//')"
