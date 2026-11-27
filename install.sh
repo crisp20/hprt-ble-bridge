@@ -171,7 +171,7 @@ show_settings() {
   echo "Bridge settings:"
   for i in "${!S_KEY[@]}"; do
     k="${S_KEY[$i]}"; v="${S_VAL[$i]}"; d="$(norm "$k" "${S_DEF[$i]}")"
-    if [ "${S_TAG[$i]}" = keep ]; then tag="keep default"; else tag="your choice, recommended $(disp "$k" "$d")"; fi
+    if [ "${S_TAG[$i]}" = keep ]; then tag="recommended to keep default value"; else tag="user choice - recommended $(disp "$k" "$d")"; fi
     note=""; [ "$v" = "$d" ] || note="   <- recommended: $(disp "$k" "$d")"
     printf '  %-18s %-7s [%s]%s\n' "$k" "$(disp "$k" "$v")" "$tag" "$note"
   done
