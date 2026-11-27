@@ -16,6 +16,7 @@ func log(_ s: String) {
 func errnoText() -> String { return String(cString: strerror(errno)) }
 func fatal(_ s: String) -> Never { log("FATAL: \(s)"); exit(1) }
 
+// Defaults below apply only to manual runs (`send`). The LaunchAgent gets every value from install.sh (S_DEF).
 let env = ProcessInfo.processInfo.environment
 let targetName = env["HPRT_NAME"] ?? "D35BT-B3F8"
 let flow       = env["HPRT_FLOW"] ?? "delay"               // delay | paced | credit
@@ -32,8 +33,8 @@ let listenPort = UInt16(env["HPRT_PORT"] ?? "") ?? 9100
 let poweredOn = 5                                          // same raw value in CBCentralManagerState and CBManagerState
 let mergeCopies = env["HPRT_MERGE"] != "0"     // merge byte-identical consecutive labels into one CPCL quantity
 let keepAliveMs = max(0, Int(env["HPRT_KEEPALIVE_MS"] ?? "") ?? 0)   // 0 = disconnect after every job (today)
-let logPath = ProcessInfo.processInfo.environment["HPRT_LOG"]          // set by the plist
-let logMaxBytes = (Int(ProcessInfo.processInfo.environment["HPRT_LOG_MAX_KB"] ?? "") ?? 1024) * 1024
+let logPath = env["HPRT_LOG"]
+let logMaxBytes = (Int(env["HPRT_LOG_MAX_KB"] ?? "") ?? 1024) * 1024
 
 func rotateLogIfNeeded() {
   guard let path = logPath,
@@ -469,11 +470,11 @@ if args.count >= 3 && args[1] == "send" {                      // one-shot test
 
       let sem = DispatchSemaphore(value: 0)
       printer.send(outJob) { err in log(err.map { "job ERROR: \($0)" } ?? "job done"); sem.signal() }
-      rotateLogIfNeeded()
       sem.wait(); close(c)                                     // close → CUPS marks job complete
+      rotateLogIfNeeded()
     }
   }
   dispatchMain()
 } else {
-  print("usage: hprt-ble-bridge send <file> | serve   (env: HPRT_NAME, HPRT_PORT, HPRT_FLOW=delay|paced|credit, HPRT_CHUNK, HPRT_DELAY_MS, HPRT_GAP_MS, HPRT_VERBOSE=1)")
+  print("usage: hprt-ble-bridge send <file> | serve   (env: HPRT_NAME, HPRT_PORT, HPRT_FLOW=delay|paced|credit, HPRT_CHUNK, HPRT_DELAY_MS, HPRT_GAP_MS, HPRT_DRAIN_MS, HPRT_CHAR, HPRT_MERGE=0|1, HPRT_KEEPALIVE_MS, HPRT_VERBOSE=0|1, HPRT_LOG, HPRT_LOG_MAX_KB)")
 }
