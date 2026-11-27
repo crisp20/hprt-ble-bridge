@@ -25,7 +25,7 @@ guide() { cat <<'EOF'
     2. Press the Enter key to submit it. Nothing happens until you press Enter.
 
     If you are not sure - just press Enter without typing anything.
-    The installer then uses the recommended answer.
+    The installer then uses the suggested answer.
 
   HOW TO READ A QUESTION
   --------------------------------------------------------------------
@@ -47,7 +47,7 @@ guide() { cat <<'EOF'
                             ^^^     ^^^ 
 
      These are the answers you can choose from: y = yes, n = no, etc.
-     The CAPITAL letter (here N = no) is the recommended answer,
+     The CAPITAL letter (here N = no) is the suggested answer,
      and is the submitted answer if you just press Enter without typing anything.
      These questions are case-insensitive, both y or Y work.
 
