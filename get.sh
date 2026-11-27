@@ -31,6 +31,8 @@ SRC=$(find "$WORK" -mindepth 1 -maxdepth 1 -type d | head -n 1)   # GitHub wraps
 [ -n "$SRC" ] && [ -f "$SRC/install.sh" ] || { echo "unexpected zip layout in $TAG" >&2; exit 1; }
 cd "$SRC"
 
+source ./guide.sh
+
 # --- 3. optional fresh start --------------------------------------------------------------
 if ls "$HOME"/Library/LaunchAgents/local.hprt-ble-bridge.*.plist >/dev/null 2>&1; then
   echo "== bridges already installed:"; ls "$HOME"/Library/LaunchAgents/local.hprt-ble-bridge.*.plist | sed 's/.*bridge\./   /; s/\.plist//'
