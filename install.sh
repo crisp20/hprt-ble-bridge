@@ -27,7 +27,7 @@ S_HELP=(
   "write characteristic UUID; empty = auto-detect ('-' clears it)"
   "1 = merge identical consecutive labels into one CPCL quantity, 0 = off"
   "ms to keep the link open after a job; 0 if this printer is also used from another Mac, phone or Chrome"
-  "1 = log every credit (~11 KB per label, troubleshooting), 0 = normal"
+  "1 = log every credit (accrues ~11 KB of log per label in verbose mode, troubleshooting), 0 = normal"
   "rotate the log at this size in KB (min 16); one .bk copy is kept"
 )
 S_VAL=()
@@ -65,7 +65,7 @@ show_settings() {
   echo "Bridge settings:"
   for i in "${!S_KEY[@]}"; do
     v="${S_VAL[$i]}"; d="${S_DEF[$i]}"
-    if [ "${S_FIX[$i]}" = 1 ]; then tag="keep default"; else tag="your choice"; fi
+    if [ "${S_FIX[$i]}" = 1 ]; then tag="recommend to leave as default"; else tag="can customize as desired"; fi
     note=""; [ "$v" = "$d" ] || note="   <- recommended: ${d:-(auto)}"
     printf '  %-18s %-7s [%s]%s\n' "${S_KEY[$i]}" "${v:-(auto)}" "$tag" "$note"
   done
