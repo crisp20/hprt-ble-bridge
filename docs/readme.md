@@ -43,13 +43,13 @@ The install script creates the Bluetooth queue directly from the installed drive
 The bridge is compiled locally with `swiftc`. Install the Command Line Tools:
 
 ```sh
-# swiftc --version to check if already installed
-# otherwise, run:
-xcode-select --install
-```
+# to check if already installed
+swiftc --version 
 
-```sh
-# ...or already installed but pointing to an incorrect directory, in which case:
+# if not installed, install with:
+xcode-select --install
+
+# or already installed but pointing to an incorrect directory, in which case:
 osascript -e 'do shell script "/usr/bin/xcode-select --switch /Library/Developer/CommandLineTools" with administrator privileges'
 ```
 
@@ -67,16 +67,18 @@ Run the following script in a terminal:
 
 ```sh
 # Production version
-curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | sh
+curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | \
+sh
 
 # Specific version
-curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | sh -s -- <release name>
+curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | \
+sh -s -- <release name>
 ```
 
 The script will ask:
  1. Whether you want to uninstall existing bridges,
- 2. Whether you want to install new bridges,
- 3. (if continuing) the name of the printer being set up,
+ 2. Whether you want to install new bridges, (and if so...)
+ 3. info about the printer and installtion choices,
  4. admin accounts & permission grants where necessary.
 
 ### Step 5 – Paper size and print preset (one-time)
@@ -215,15 +217,18 @@ lpstat -v | grep D35BT                        # queue gone, others unchanged
 
 | Variable            | Default                              | Meaning                                                                                                                         |
 | ------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `HPRT_NAME`         | `D35BT-B3F8`                         | Exact BLE name, case-sensitive                                                                                                  |
+| `HPRT_NAME`         | /                                    | Exact BLE name, case-sensitive                                                                                                  |
 | `HPRT_PORT`         | `9100`                               | TCP port on 127.0.0.1 that CUPS connects to; must match the queue URI                                                           |
 | `HPRT_FLOW`         | `delay` (`install.sh` sets `credit`) | `credit` = printer-driven flow control (~5 s), `delay` = acknowledge + pause (~30 s), `paced` = fixed pause, no acknowledgement |
 | `HPRT_CHUNK`        | `100`                                | Max bytes per BLE write. The printer itself caps this at 100                                                                    |
 | `HPRT_DELAY_MS`     | `20`                                 | Pause per write in `delay`/`paced` modes                                                                                        |
-| `HPRT_VERBOSE`      | off                                  | `1` logs every characteristic and credit                                                                                        |
+| `HPRT_GAP_MS`       | `8`                                  | Interval (ms) between packets in credit mode (relevant for macOS 10.12 only)                                                    |
 | `HPRT_DRAIN_MS`     | `250`                                | Drain time (ms) between jobs. Ensures end of job is not lost.                                                                   |
-| `HPRT_MERGE`        | on                                   | Merges byte-identical consecutive labels into one CPCL label with quantity N. 0 = off                                           |
+| `HPRT_CHAR`         | `<empty string>`                     | Write characteristic UUID.                                                                                                      |
+| `HPRT_MERGE`        | `<on>`                               | Merges byte-identical consecutive labels into one CPCL label with quantity N. 0 = off                                           |
 | `HPRT_KEEPALIVE_MS` | `30000`                              | Keep alive (ms) for the printer connection.                                                                                     |
+| `HPRT_VERBOSE`      | `<off>`                              | `1` logs every characteristic and credit                                                                                        |
+| `HPRT_LOG_MAX_KB`   | `1024`                               | Max size of log file before being rotated                                                                                       |
 
 ## References
 
