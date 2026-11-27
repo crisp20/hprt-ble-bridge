@@ -65,4 +65,5 @@ EOF
 
 if [ -z "${HPRT_GUIDE_SHOWN:-}" ]; then
   guide
+  export HPRT_GUIDE_SHOWN=1
 fi
