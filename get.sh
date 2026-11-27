@@ -1,34 +1,34 @@
 #!/bin/sh
 # get.sh - download a hprt-ble-bridge release, optionally wipe old bridges, install one or more printers
-# usage:  curl -fsSL https://raw.githubusercontent.com/OWNER/REPO/main/get.sh | sh
+# usage:  curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | sh
 #         curl -fsSL …/get.sh | sh -s -- v1.4.0        (a set version)
 set -eu
 
 REPO="crisp20/hprt-ble-bridge"
 TAG="${1:-latest}"
-BASE="$HOME/Library/Application Support/hprt-ble-bridge"
 TTY=/dev/tty                                       # stdin is the script itself under curl | sh
 
 ask() {  # ask "question" default → echoes answer
   printf '%s ' "$1" > "$TTY"; read -r a < "$TTY" || a=""; echo "${a:-$2}"
 }
 
-# --- 1. resolve and download the release zip -------------------------------------------
+# --- 1. resolve the release tag -----------------------------------------------------------
 if [ "$TAG" = latest ]; then
   TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)
   [ -n "$TAG" ] || { echo "could not find the latest release of $REPO" >&2; exit 1; }
 fi
-DEST="$BASE/$TAG"
-TMPZIP=$(mktemp -t hprt-ble-bridge).zip
-echo "== downloading $REPO $TAG"
-curl -fSL --progress-bar -o "$TMPZIP" "https://github.com/$REPO/archive/refs/tags/$TAG.zip"
 
-# --- 2. unzip (GitHub wraps the source in REPO-TAG/) -------------------------------------
-rm -rf "$DEST"; mkdir -p "$DEST"
-unzip -q "$TMPZIP" -d "$DEST.tmp"; rm -f "$TMPZIP"
-mv "$DEST.tmp"/*/* "$DEST"/; rm -rf "$DEST.tmp"
-cd "$DEST"
-echo "   unpacked to $DEST"
+# --- 2. download + unzip into a private temp folder, removed when this script exits ------
+WORK=$(mktemp -d "/tmp/hprt-ble-bridge")
+trap 'cd /; rm -rf "$WORK"' EXIT                   # success, error (set -e) or Ctrl-C
+trap 'exit 130' INT TERM                           # make Ctrl-C go through the EXIT trap
+
+echo "== downloading $REPO $TAG"
+curl -fSL --progress-bar -o "$WORK/src.zip" "https://github.com/$REPO/archive/refs/tags/$TAG.zip"
+unzip -q "$WORK/src.zip" -d "$WORK"
+SRC=$(find "$WORK" -mindepth 1 -maxdepth 1 -type d | head -n 1)   # GitHub wraps it in REPO-TAG/
+[ -n "$SRC" ] && [ -f "$SRC/install.sh" ] || { echo "unexpected zip layout in $TAG" >&2; exit 1; }
+cd "$SRC"
 
 # --- 3. optional fresh start --------------------------------------------------------------
 if ls "$HOME"/Library/LaunchAgents/local.hprt-ble-bridge.*.plist >/dev/null 2>&1; then

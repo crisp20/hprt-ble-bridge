@@ -111,7 +111,9 @@ cat > "$PLIST" <<EOF
     <key>HPRT_PORT</key><string>$PORT</string>
     <key>HPRT_FLOW</key><string>credit</string>
     <key>HPRT_KEEPALIVE_MS</key><string>30000</string>
-    <key>HPRT_VERBOSE</key><string>0</string>
+    <key>HPRT_VERBOSE</key><string>1</string>
+    <key>HPRT_LOG_MAX_KB</key><string>20</string>
+    <key>HPRT_LOG</key><string>$HOME/Library/Logs/hprt-ble-bridge-$SUFFIX.log</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

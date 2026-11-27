@@ -13,6 +13,18 @@ let logFmt: DateFormatter = {
 func log(_ s: String) {
   FileHandle.standardError.write("\(logFmt.string(from: Date())) \(s)\n".data(using: .utf8)!)
 }
+func rotateLogIfNeeded() {
+  guard let path = logPath,
+        let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+        let size = (attrs[.size] as? NSNumber)?.intValue, size > logMaxBytes else { return }
+  fflush(stdout); fflush(stderr)
+  let old = path + ".bk"
+  unlink(old)                       // keep only one old copy
+  rename(path, old)
+  freopen(path, "a", stdout)        // point stdout/stderr at a fresh file
+  freopen(path, "a", stderr)
+  log("log rotated: previous \(size / 1024) KB moved to \(old)")
+}
 func errnoText() -> String { return String(cString: strerror(errno)) }
 func fatal(_ s: String) -> Never { log("FATAL: \(s)"); exit(1) }
 
@@ -32,6 +44,8 @@ let listenPort = UInt16(env["HPRT_PORT"] ?? "") ?? 9100
 let poweredOn = 5                                          // same raw value in CBCentralManagerState and CBManagerState
 let mergeCopies = env["HPRT_MERGE"] != "0"     // merge byte-identical consecutive labels into one CPCL quantity
 let keepAliveMs = max(0, Int(env["HPRT_KEEPALIVE_MS"] ?? "") ?? 0)   // 0 = disconnect after every job (today)
+let logPath = ProcessInfo.processInfo.environment["HPRT_LOG"]          // set by the plist
+let logMaxBytes = (Int(ProcessInfo.processInfo.environment["HPRT_LOG_MAX_KB"] ?? "") ?? 1024) * 1024
 
 final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
   private let q = DispatchQueue(label: "ble")
@@ -433,6 +447,7 @@ if args.count >= 3 && args[1] == "send" {                      // one-shot test
 } else if args.count >= 2 && args[1] == "serve" {              // CUPS bridge
   signal(SIGPIPE, SIG_IGN)
   let fd = listenLoopback(listenPort)                          // exits with FATAL if the port is taken
+  rotateLogIfNeeded()
   log("listening on 127.0.0.1:\(listenPort) for \(targetName) (flow \(flow), chunk \(chunkCap), delay \(delayMs) ms), drain \(drainMs) ms")
   DispatchQueue(label: "accept").async {                       // one job at a time
     while true {
@@ -453,6 +468,7 @@ if args.count >= 3 && args[1] == "send" {                      // one-shot test
 
       let sem = DispatchSemaphore(value: 0)
       printer.send(outJob) { err in log(err.map { "job ERROR: \($0)" } ?? "job done"); sem.signal() }
+      rotateLogIfNeeded()
       sem.wait(); close(c)                                     // close → CUPS marks job complete
     }
   }
