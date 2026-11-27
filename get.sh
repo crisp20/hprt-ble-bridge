@@ -24,7 +24,8 @@ trap 'cd /; rm -rf "$WORK"' EXIT                   # success, error (set -e) or 
 trap 'exit 130' INT TERM                           # make Ctrl-C go through the EXIT trap
 
 echo "== downloading $REPO $TAG"
-curl -fSL --progress-bar -o "$WORK/src.zip" "https://github.com/$REPO/archive/refs/tags/$TAG.zip"
+curl -fsSL -o "$WORK/src.zip" "https://github.com/$REPO/archive/refs/tags/$TAG.zip"
+echo "   $(( $(wc -c < "$WORK/src.zip") / 1024 )) KB"
 unzip -q "$WORK/src.zip" -d "$WORK"
 SRC=$(find "$WORK" -mindepth 1 -maxdepth 1 -type d | head -n 1)   # GitHub wraps it in REPO-TAG/
 [ -n "$SRC" ] && [ -f "$SRC/install.sh" ] || { echo "unexpected zip layout in $TAG" >&2; exit 1; }
