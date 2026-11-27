@@ -19,7 +19,7 @@ if [ "$TAG" = latest ]; then
 fi
 
 # --- 2. download + unzip into a private temp folder, removed when this script exits ------
-WORK=$(mktemp -d "/tmp/hprt-ble-bridge")
+WORK=$(mktemp -d "/tmp/hprt-ble-bridge.XXXXXX")
 trap 'cd /; rm -rf "$WORK"' EXIT                   # success, error (set -e) or Ctrl-C
 trap 'exit 130' INT TERM                           # make Ctrl-C go through the EXIT trap
 
