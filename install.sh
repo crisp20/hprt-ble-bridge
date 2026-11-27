@@ -14,27 +14,50 @@ ask()     { printf '%s ' "$1" > "$TTY"; a=""; read -r a < "$TTY" || true; echo "
 port_of() { "$PB" -c 'Print :EnvironmentVariables:HPRT_PORT' "$1" 2>/dev/null || true; }
 
 # ---- bridge settings: one index per setting ----
-# FIX=1: tuned for the D35BT, leave as is unless troubleshooting. FIX=0: your choice.
+# S_DEF = recommended value (times may use ms/s/m). S_TAG: keep = tuned for the D35BT, leave as is; choice = depends on your setup.
 S_KEY=( HPRT_FLOW HPRT_CHUNK HPRT_DELAY_MS HPRT_GAP_MS HPRT_DRAIN_MS HPRT_CHAR HPRT_MERGE HPRT_KEEPALIVE_MS HPRT_VERBOSE HPRT_LOG_MAX_KB )
-S_DEF=( credit    100        20            8           250           ""        1          30000             0            1024 )
-S_FIX=( 1         1          1             1           1             1         0          0                 0            0 )
+S_DEF=( credit    100        20ms          8ms         250ms         ""        1          15m               0            1024 )
+S_TAG=( keep      keep       keep          keep        keep          keep      keep       choice            choice       choice )
 S_HELP=(
   "flow control: credit | delay | paced"
   "max bytes per BLE write, 20-100 (over 100 can hang the printer until power-cycled)"
-  "ms between writes in delay/paced mode (also used by the credit fallback)"
-  "ms between packets in credit mode, macOS 10.12 only"
-  "ms to wait after the last write before the job counts as done"
+  "time between writes in delay/paced mode, e.g. 20ms"
+  "time between packets in credit mode, macOS 10.12 only, e.g. 8ms"
+  "wait after the last write before the job counts as done, e.g. 250ms"
   "write characteristic UUID; empty = auto-detect ('-' clears it)"
   "1 = merge identical consecutive labels into one CPCL quantity, 0 = off"
-  "ms to keep the link open after a job; 0 if this printer is also used from another Mac, phone or Chrome"
-  "1 = log every credit (accrues ~11 KB of log per label in verbose mode, troubleshooting), 0 = normal"
+  "keep the Bluetooth link open after a job, e.g. 30s or 15m; 0 = disconnect after every job (use 0 if the printer is shared with another Mac, phone or Chrome)"
+  "1 = log every credit (~11 KB per label, troubleshooting), 0 = normal"
   "rotate the log at this size in KB (min 16); one .bk copy is kept"
 )
 S_VAL=()
 
 cur_of() { "$PB" -c "Print :EnvironmentVariables:$1" "$PLIST" 2>/dev/null || true; }
 
-valid() {  # valid KEY VALUE
+is_dur() { case "$1" in HPRT_DELAY_MS|HPRT_GAP_MS|HPRT_DRAIN_MS|HPRT_KEEPALIVE_MS) return 0 ;; esac; return 1; }
+
+to_ms() {  # "10ms" | "10s" | "10m" | "10" (= ms) → milliseconds; fails on anything else
+  local v n m
+  v="$(printf '%s' "$1" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+  case "$v" in
+    *ms) n="${v%ms}"; m=1 ;;                         # checked before *s and *m on purpose
+    *s)  n="${v%s}";  m=1000 ;;
+    *m)  n="${v%m}";  m=60000 ;;
+    *)   n="$v";      m=1 ;;
+  esac
+  case "$n" in ""|*[!0-9]*) return 1 ;; esac         # whole numbers only: no 1.5s, no negatives
+  [ "${#n}" -le 9 ] || return 1                      # guard against absurd values
+  echo $(( 10#$n * m ))                              # 10#: "08" is decimal, not invalid octal
+}
+
+fmt_ms() {  # 900000 → 15m, 30000 → 30s, 250 → 250ms
+  local n="$1"
+  if [ "$n" -gt 0 ] && [ $(( n % 60000 )) -eq 0 ]; then echo "$(( n / 60000 ))m"
+  elif [ "$n" -gt 0 ] && [ $(( n % 1000 )) -eq 0 ]; then echo "$(( n / 1000 ))s"
+  else echo "${n}ms"; fi
+}
+
+valid() {  # valid KEY VALUE (VALUE already normalised)
   case "$1:$2" in
     HPRT_FLOW:credit|HPRT_FLOW:delay|HPRT_FLOW:paced) return 0 ;;
     HPRT_FLOW:*) return 1 ;;
@@ -52,37 +75,51 @@ valid() {  # valid KEY VALUE
   esac
 }
 
+norm() {  # norm KEY VALUE → value as stored in the plist (times in ms); fails if invalid
+  local v="$2"
+  if is_dur "$1"; then v="$(to_ms "$v")" || return 1; fi
+  valid "$1" "$v" || return 1
+  echo "$v"
+}
+
+disp() {  # disp KEY STORED_VALUE → what the table shows
+  if is_dur "$1"; then fmt_ms "$2"; else echo "${2:-(auto)}"; fi
+}
+
 load_settings() {  # $1 = current (existing plist, else recommended) | recommended
+  local i k v x
   for i in "${!S_KEY[@]}"; do
-    v=""
-    if [ "$1" = current ] && [ -f "$PLIST" ]; then v="$(cur_of "${S_KEY[$i]}")"; fi
-    if [ -z "$v" ] || ! valid "${S_KEY[$i]}" "$v"; then v="${S_DEF[$i]}"; fi
+    k="${S_KEY[$i]}"; v=""
+    if [ "$1" = current ] && [ -f "$PLIST" ]; then v="$(cur_of "$k")"; fi
+    if [ -n "$v" ] && x="$(norm "$k" "$v")"; then v="$x"; else v="$(norm "$k" "${S_DEF[$i]}")"; fi
     S_VAL[$i]="$v"
   done
 }
 
 show_settings() {
+  local i k v d tag note
   echo "Bridge settings:"
   for i in "${!S_KEY[@]}"; do
-    v="${S_VAL[$i]}"; d="${S_DEF[$i]}"
-    if [ "${S_FIX[$i]}" = 1 ]; then tag="recommend to leave as default"; else tag="can customize as desired"; fi
-    note=""; [ "$v" = "$d" ] || note="   <- recommended: ${d:-(auto)}"
-    printf '  %-18s %-7s [%s]%s\n' "${S_KEY[$i]}" "${v:-(auto)}" "$tag" "$note"
+    k="${S_KEY[$i]}"; v="${S_VAL[$i]}"; d="$(norm "$k" "${S_DEF[$i]}")"
+    if [ "${S_TAG[$i]}" = keep ]; then tag="keep default"; else tag="your choice, recommended $(disp "$k" "$d")"; fi
+    note=""; [ "$v" = "$d" ] || note="   <- recommended: $(disp "$k" "$d")"
+    printf '  %-18s %-7s [%s]%s\n' "$k" "$(disp "$k" "$v")" "$tag" "$note"
   done
 }
 
 customise() {
+  local i k v x d tag hint
   for i in "${!S_KEY[@]}"; do
-    k="${S_KEY[$i]}"
-    if [ "${S_FIX[$i]}" = 1 ]; then tag="recommended: leave at ${S_DEF[$i]:-(auto)}"
-    else tag="recommended: ${S_DEF[$i]}"; fi
+    k="${S_KEY[$i]}"; d="$(disp "$k" "$(norm "$k" "${S_DEF[$i]}")")"
+    if [ "${S_TAG[$i]}" = keep ]; then tag="recommended: leave at $d"; else tag="recommended: $d"; fi
+    hint=""; is_dur "$k" && hint=" (use e.g. 250ms, 30s, 15m; no unit = assume ms)"
     printf '\n%s - %s\n  (%s)\n' "$k" "${S_HELP[$i]}" "$tag" > "$TTY"
     while :; do
-      v="$(ask "  $k [${S_VAL[$i]:-auto}]:" "${S_VAL[$i]}")"
+      v="$(ask "  $k [$(disp "$k" "${S_VAL[$i]}")]:" "$(disp "$k" "${S_VAL[$i]}")")"
       v="$(printf '%s' "$v" | tr -d '[:space:]')"
-      [ "$k:$v" != "HPRT_CHAR:-" ] || v=""
-      if valid "$k" "$v"; then break; fi
-      echo "  invalid value '$v'" > "$TTY"
+      [ "$k:$v" != "HPRT_CHAR:-" ] && [ "$k:$v" != "HPRT_CHAR:(auto)" ] || v=""
+      if x="$(norm "$k" "$v")"; then v="$x"; break; fi
+      echo "  invalid value '$v'$hint" > "$TTY"
     done
     S_VAL[$i]="$v"
   done
@@ -121,7 +158,7 @@ fi
 
 PORT="${2:-}"
 if [ -z "$PORT" ]; then
-  if has_tty; then PORT="$(ask "Port [$suggest]:" "$suggest")"; else PORT="$suggest"; fi
+  if has_tty; then PORT="$(ask "Network Port [$suggest]:" "$suggest")"; else PORT="$suggest"; fi
 fi
 case "$PORT" in ""|*[!0-9]*) echo "invalid port '$PORT'" >&2; exit 2 ;; esac
 

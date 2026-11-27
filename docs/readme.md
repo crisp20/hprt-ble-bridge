@@ -155,12 +155,12 @@ Printer: D35BT-B3F8   port: 9100   queue: HPRT_D35BT_B3F8   user: <account usern
 Bridge settings:                                                                           
   HPRT_FLOW          credit  [recommend to leave as default]
   HPRT_CHUNK         100     [recommend to leave as default]
-  HPRT_DELAY_MS      20      [recommend to leave as default]
-  HPRT_GAP_MS        8       [recommend to leave as default]
-  HPRT_DRAIN_MS      250     [recommend to leave as default]
+  HPRT_DELAY_MS      20ms    [recommend to leave as default]
+  HPRT_GAP_MS        8ms     [recommend to leave as default]
+  HPRT_DRAIN_MS      250ms   [recommend to leave as default]
   HPRT_CHAR          (auto)  [recommend to leave as default]
   HPRT_MERGE         1       [can customize as desired]
-  HPRT_KEEPALIVE_MS  30000   [can customize as desired]
+  HPRT_KEEPALIVE_MS  15m     [can customize as desired]
   HPRT_VERBOSE       0       [can customize as desired]
   HPRT_LOG_MAX_KB    1024    [can customize as desired]
 Use these settings? [Y]es / [r]ecommended / [c]ustomise:
@@ -331,7 +331,7 @@ plist `EnvironmentVariables`
 | `HPRT_DRAIN_MS`     | `250`                                | Drain time (ms) between jobs. Ensures end of job is not lost.                                                                   |
 | `HPRT_CHAR`         | `<empty string>`                     | Write characteristic UUID.                                                                                                      |
 | `HPRT_MERGE`        | `<on>`                               | Merges byte-identical consecutive labels into one CPCL label with quantity N. 0 = off                                           |
-| `HPRT_KEEPALIVE_MS` | `30000`                              | Keep alive (ms) for the printer connection.                                                                                     |
+| `HPRT_KEEPALIVE_MS` | `900000`                             | Keep alive (ms) for the printer connection.                                                                                     |
 | `HPRT_VERBOSE`      | `<off>`                              | `1` logs every characteristic and credit                                                                                        |
 | `HPRT_LOG_MAX_KB`   | `1024`                               | Max size of log file before being rotated                                                                                       |
 
