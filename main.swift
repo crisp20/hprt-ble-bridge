@@ -31,6 +31,7 @@ let writeUUIDs = (env["HPRT_CHAR"].map { [$0] } ??
 let listenPort = UInt16(env["HPRT_PORT"] ?? "") ?? 9100
 let poweredOn = 5                                          // same raw value in CBCentralManagerState and CBManagerState
 let mergeCopies = env["HPRT_MERGE"] != "0"     // merge byte-identical consecutive labels into one CPCL quantity
+let keepAliveMs = max(0, Int(env["HPRT_KEEPALIVE_MS"] ?? "") ?? 0)   // 0 = disconnect after every job (today)
 
 final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
   private let q = DispatchQueue(label: "ble")
@@ -49,6 +50,10 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   private var pendingStart = false
   private var job = 0
   private var mode = flow
+  private var idleTimer: DispatchWorkItem?
+  private var closing = false           // we called cancelPeripheralConnection on a connected link
+  private var startAfterClose = false   // a job arrived while closing
+  private var quietDisconnect = false   // we called cancel ourselves; don't log the callback as a dro
 
   override init() { super.init(); central = CBCentralManager(delegate: self, queue: q) }
 
@@ -61,14 +66,48 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
     q.async {
       self.job += 1; let myJob = self.job
+      self.idleTimer?.cancel(); self.idleTimer = nil
       self.completion = completion; self.payload = Data(data); self.offset = 0
-      self.writeChar = nil; self.credits = 0; self.granted = 0; self.writes = 0
-      self.maxLen = nil; self.draining = false; self.pumpScheduled = false; self.lastNotify = ""; self.mode = flow
-      if self.central.state.rawValue == poweredOn { self.findPeripheral() } else { self.pendingStart = true }
+      self.granted = 0; self.writes = 0                         // per-job stats only
+      self.draining = false; self.pumpScheduled = false; self.lastNotify = ""; self.mode = flow
+      if self.closing, self.peripheral?.state == .disconnected { self.closing = false }   // safety
+      if let p = self.peripheral, p.state == .connected, self.writeChar != nil, !self.closing {
+        self.reuseLink()
+      } else {
+        self.writeChar = nil; self.credits = 0; self.maxLen = nil
+        if self.closing { self.startAfterClose = true; log("link closing, reconnecting after disconnect") }
+        else if self.central.state.rawValue == poweredOn { self.findPeripheral() }
+        else { self.pendingStart = true }
+      }
       self.q.asyncAfter(deadline: .now() + 20) {
         if self.job == myJob && self.writeChar == nil {
           self.finish(BridgeError(description: "timeout: \(targetName) not found / no writable characteristic"))
         }
+      }
+    }
+  }
+
+  private func reuseLink() {
+    guard let p = peripheral, let ch = writeChar else { return }
+    started = Date()
+    log("reusing open link: writing \(payload.count) B to \(ch.uuid), \(credits) credits carried over")
+    if mode == "credit" {
+      if credits == 0,
+         let st = (p.services ?? []).flatMap({ $0.characteristics ?? [] }).first(where: { $0.uuid == statusUUID }) {
+        log("  no credits left, re-subscribing to \(st.uuid)")      // untested: re-trigger the credit handshake
+        p.setNotifyValue(false, for: st); p.setNotifyValue(true, for: st)
+      }
+      armCreditFallback()
+    }
+    pump()
+  }
+
+  private func armCreditFallback() {
+    let myJob = job
+    q.asyncAfter(deadline: .now() + 3) {
+      if self.job == myJob && self.completion != nil && self.granted == 0 && self.offset < self.payload.count {
+        log("  no FF03 credits within 3 s - falling back to delay mode for this job")
+        self.mode = "delay"; self.pump()
       }
     }
   }
@@ -105,9 +144,19 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     finish(error ?? BridgeError(description: "connect failed"))
   }
   func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
+    let ours = closing || quietDisconnect
+    closing = false; quietDisconnect = false; writeChar = nil; credits = 0; maxLen = nil
+    idleTimer?.cancel(); idleTimer = nil
+    if startAfterClose {                                    // a job was waiting for our own disconnect
+      startAfterClose = false
+      if central.state.rawValue == poweredOn { findPeripheral() } else { pendingStart = true }
+      return
+    }
     if completion != nil {
       log("  disconnected after \(offset)/\(payload.count) B")
       finish(error ?? BridgeError(description: "disconnected mid-job"))
+    } else if !ours {
+      log("link dropped while idle\(error.map { ": \($0.localizedDescription)" } ?? ""); next job reconnects")
     }
   }
 
@@ -128,15 +177,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     else { return }
     writeChar = ch; started = Date()
     log("writing \(payload.count) B to \(ch.uuid): flow \(flow), chunk ≤\(chunkCap) B, delay \(delayMs) ms")
-    if mode == "credit" {
-      let myJob = job
-      q.asyncAfter(deadline: .now() + 3) {
-        if self.job == myJob && self.completion != nil && self.granted == 0 {
-          log("  no FF03 credits within 3 s – falling back to delay mode for this job")
-          self.mode = "delay"; self.pump()
-        }
-      }
-    }
+    if mode == "credit" { armCreditFallback() }
     pump()
   }
 
@@ -223,9 +264,25 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   // ---- cleanup ----
   private func finish(_ err: Error?) {
     guard let done = completion else { return }
-    completion = nil; writeChar = nil; central.stopScan()
-    if let p = peripheral { central.cancelPeripheralConnection(p) }
+    completion = nil; central.stopScan()
+    if err == nil, keepAliveMs > 0, let p = peripheral, p.state == .connected, writeChar != nil {
+      let w = DispatchWorkItem { [weak self] in self?.closeLink("idle \(keepAliveMs) ms") }
+      idleTimer = w
+      q.asyncAfter(deadline: .now() + .milliseconds(keepAliveMs), execute: w)
+    } else {
+      closeLink(nil)
+    }
     done(err)
+  }
+
+  private func closeLink(_ why: String?) {
+    idleTimer?.cancel(); idleTimer = nil
+    writeChar = nil
+    guard let p = peripheral, p.state != .disconnected else { return }
+    if let why = why { log("\(why), disconnecting") }
+    if p.state == .connected { closing = true }   // only then is didDisconnect guaranteed
+    quietDisconnect = true
+    central.cancelPeripheralConnection(p)
   }
 }
 
