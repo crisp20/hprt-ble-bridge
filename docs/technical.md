@@ -216,7 +216,6 @@ thereby only costing one label transfer time. (*3 copies: 58,279 -> 19,769 B, ~1
 | Bigger packets (180 B)               | –                           | Printer disconnects (`CBErrorDomain 6`)                                                |
 | Lower `HPRT_GAP_MS` / unpaced writes | –                           | The printer's credits set the rate; unpaced writes overflow it                         |
 | Crop or compress the bitmap          | ~1.5–3× less transfer time  | Changes the job the driver produced; not reliable enough                               |
-| Keep the BLE link open after a job   | ~0.6 s per back-to-back job | Too little gain; blocks phones, the app's Chrome button and other accounts             |
 | Shorter drain (< 250 ms)             | < 0.2 s per queued job      | 50 ms also worked; 250 ms kept as margin for slower Macs/stacks. Negligible either way |
 
 ### Re-measuring
