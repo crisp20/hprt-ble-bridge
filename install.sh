@@ -142,4 +142,4 @@ done
 
 sleep 2; tail -2 "$LOG" 2>/dev/null || true
 echo "Done. Print to 'HPRT D35BT $SUFFIX (Bluetooth)'."
-echo "Per account, once: create the 60 x 40 mm paper size (margins 0) and save Firefox print settings for this printer."
+echo "Create the 60 x 40 mm paper size (margins 0) and save print settings for this printer."
