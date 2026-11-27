@@ -23,7 +23,9 @@ Background and design: see [TECHNICAL.md](TECHNICAL.md).
 
 ---
 
-## Step 1 – Install the HPRT macOS driver
+## Installation
+
+### Step 1 – Install the HPRT macOS driver
 
 1. Download **"Mac Drivers for D35BT"** from <https://download.hprt.com/Downloads.html>.
 2. Run the installer.
@@ -36,7 +38,7 @@ Background and design: see [TECHNICAL.md](TECHNICAL.md).
 You do **not** need to add a USB printer first. 
 The install script creates the Bluetooth queue directly from the installed driver.
 
-## Step 2 – Install the Xcode Command Line Tools
+### Step 2 – Install the Xcode Command Line Tools
 
 The bridge is compiled locally with `swiftc`. Install the Command Line Tools:
 
@@ -51,7 +53,7 @@ xcode-select --install
 osascript -e 'do shell script "/usr/bin/xcode-select --switch /Library/Developer/CommandLineTools" with administrator privileges'
 ```
 
-## Step 3 – Find the printer's Bluetooth name
+### Step 3 – Find the printer's Bluetooth name
 
 1. Printer on, cover closed (it must **click**), light **blue**.
 2. **Hold FEED ~1.5 s** until the light flashes once, then release -> a self-test label prints.
@@ -59,53 +61,25 @@ osascript -e 'do shell script "/usr/bin/xcode-select --switch /Library/Developer
 
 Pairing in System Settings -> Bluetooth is **not required**. BLE connects without pairing.
 
-## Step 4 – Get the files
+### Step 4 – Run the install / uninstall script
+
+Run the following script in a terminal:
 
 ```sh
-mkdir -p ~/src && cd ~/src
-git clone <your-repo-url> hprt-ble-bridge     # or copy the folder over
-cd hprt-ble-bridge
-ls        # docs            Info.plist      install.sh      main.swift
+# Production version
+curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | sh
+
+# Specific version
+curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | sh -s -- <release name>
 ```
 
-Always **build on each Mac**.
-Don't copy a compiled binary between Macs: Bluetooth permission is tied to the binary's signature, downloaded binaries get quarantined, and Intel and Apple Silicon needdifferent builds.
+The script will ask:
+ 1. Whether you want to uninstall existing bridges,
+ 2. Whether you want to install new bridges,
+ 3. (if continuing) the name of the printer being set up,
+ 4. admin accounts & permission grants where necessary.
 
-## Step 5 – Run the installer
-
-Turn off any devices connected to the printer, then run:
-
-```sh
-# sh install.sh <printer id> <port>
-
-# e.g.
-sh install.sh B3F8 9100
-sh install.sh 5676 9101
-```
-
-What it does:
-
-| Stage | Action                                                                                                                                                                      |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1/4   | Compiles `~/bin/hprt-ble-bridge`, with the Bluetooth usage text embedded                                                                                                    |
-| 2/4   | Stops any running bridge, then sends a tiny test job over BLE. The printer **feeds one blank label**, and macOS asks **Terminal** for Bluetooth permission: click **Allow** |
-| 3/4   | Installs and starts the LaunchAgent `~/Library/LaunchAgents/local.hprt-ble-bridge.XXXX.plist`, logging to `~/Library/Logs/hprt-ble-bridge-XXXX.log`                         |
-| 4/4   | Creates the CUPS queue `HPRT_D35BT_XXXX` -> `socket://127.0.0.1:PORT/?snmp=false` (a macOS admin dialog asks for an administrator's name and password)                       |
-
-Re-running the script is safe. It rebuilds the binary and replaces the agent and the queue.
-
-On port collision (installing multiple bridges on the same port), the installation simply fails.
-[Uninstall the existing bridge](#uninstall), then run the installation again.
-
-**The bridge installation is per account**. Install the bridge for each individual account.
-
-## Step 6 – Grant Bluetooth permission to the bridge (if asked)
-
-The background bridge may need its own permission the first time it prints. 
-If a print does nothing and the log shows `bluetooth state: 3`, 
-open **System Settings -> Privacy & Security -> Bluetooth** and enable `hprt-ble-bridge`.
-
-## Step 7 – Paper size and print preset (one-time)
+### Step 5 – Paper size and print preset (one-time)
 
 Associate the desired print size and setting to this printer.
 
@@ -125,7 +99,7 @@ In any print dialog:
    - Available For: **HPRT D34BT XXXX**
    - Type: **Print Job Preset**
 
-## Step 8 – Test
+### Step 6 – Test
 
 ```sh
 tail -f ~/Library/Logs/hprt-ble-bridge-*.log
@@ -149,14 +123,14 @@ Expected log:
 ## Daily use
 
 - **After a reboot:** nothing to do. Log in and the bridge starts automatically.
-- **Before printing:** the printer is on, the light is blue, and no phone app is connected.
+- **Before printing:** the printer is on, the light is blue, and no other devices are connected.
 - A label takes **~7 s** from clicking Print to paper out. See [technical.md](./technical.md) for why.
 
 ## Troubleshooting
 
 | Symptom                                   | Fix                                                                                                                                                                                                 |
 | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Log: `scanning…` -> `timeout … not found`  | Printer off, asleep, stuck, or connected to a phone. **Power-cycle the printer**, close phone apps, and print again                                                                                 |
+| Log: `scanning…` -> `timeout … not found` | Printer off, asleep, stuck, or connected to a phone. **Power-cycle the printer**, close phone apps, and print again                                                                                 |
 | Log: `bluetooth state: 3`                 | Grant Bluetooth permission (Step 6). This is needed again after rebuilding the binary                                                                                                               |
 | Blank label                               | Run `LC_ALL=C tr -d '\000' < ~/Library/Logs/hprt-last-job-9100.bin \| wc -c` (use your port). A value around 57 means the page image was empty: check "Shrink To Fit Page Width" and the paper size |
 | Log: `refusing … not printer data`        | The queue isn't using the HPRT driver. Re-run `install.sh`                                                                                                                                          |
@@ -224,7 +198,7 @@ Each printer has its own bridge and queue:
 The binary `~/bin/hprt-ble-bridge` is shared by all printers.
 The HPRT driver and any **USB queue** are left untouched.
 
-### Remove one printer
+### Remove a specific printer
 
 ```sh
 SUFFIX=5676                                   # last 4 hex of the printer to remove
@@ -242,7 +216,7 @@ lpstat -v | grep D35BT                        # queue gone, others unchanged
 
 The other printers keep working. Their ports don't change.
 
-### Remove everything
+### Remove all printers
 
 Remove all printers and print queues.
 
