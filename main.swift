@@ -50,7 +50,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   private var pendingStart = false
   private var job = 0
   private var mode = flow
-  private var idleTimer: DispatchWorkItem?
+  private var idleGen = 0 
   private var closing = false           // we called cancelPeripheralConnection on a connected link
   private var startAfterClose = false   // a job arrived while closing
   private var quietDisconnect = false   // we called cancel ourselves; don't log the callback as a dro
@@ -66,7 +66,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
     q.async {
       self.job += 1; let myJob = self.job
-      self.idleTimer?.cancel(); self.idleTimer = nil
+      self.idleGen += 1
       self.completion = completion; self.payload = Data(data); self.offset = 0
       self.granted = 0; self.writes = 0                         // per-job stats only
       self.draining = false; self.pumpScheduled = false; self.lastNotify = ""; self.mode = flow
@@ -146,7 +146,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
     let ours = closing || quietDisconnect
     closing = false; quietDisconnect = false; writeChar = nil; credits = 0; maxLen = nil
-    idleTimer?.cancel(); idleTimer = nil
+    idleGen += 1
     if startAfterClose {                                    // a job was waiting for our own disconnect
       startAfterClose = false
       if central.state.rawValue == poweredOn { findPeripheral() } else { pendingStart = true }
@@ -266,9 +266,10 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     guard let done = completion else { return }
     completion = nil; central.stopScan()
     if err == nil, keepAliveMs > 0, let p = peripheral, p.state == .connected, writeChar != nil {
-      let w = DispatchWorkItem { [weak self] in self?.closeLink("idle \(keepAliveMs) ms") }
-      idleTimer = w
-      q.asyncAfter(deadline: .now() + .milliseconds(keepAliveMs), execute: w)
+      idleGen += 1; let gen = idleGen
+      q.asyncAfter(deadline: .now() + .milliseconds(keepAliveMs)) {
+        if self.idleGen == gen && self.completion == nil { self.closeLink("idle \(keepAliveMs) ms") }
+      }
     } else {
       closeLink(nil)
     }
@@ -276,7 +277,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   }
 
   private func closeLink(_ why: String?) {
-    idleTimer?.cancel(); idleTimer = nil
+    idleGen += 1
     writeChar = nil
     guard let p = peripheral, p.state != .disconnected else { return }
     if let why = why { log("\(why), disconnecting") }

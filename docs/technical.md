@@ -137,12 +137,14 @@ click Print (system print dialog)
   │    socket backend connects to 127.0.0.1:PORT          ~0 s (was ~4 s, see "snmp=false" below)
   ▼
 bridge: "job received"                                <---------------------------------------------\
-  │ 3)  BLE connect + service discovery + subscribe       ~0.6 s                                    |
+  │ 3)  BLE connect + service discovery + subscribe       ~0.6 s for cold connections               |
+  │                                                          connections are kept alive for         |
+  │                                                          a period of time (HPRT_KEEPALIVE_MS)   |
   ▼                                                                                                 |
 bridge: "writing N B"                                                                               |
   │ 4)  BLE transfer, printer-paced (~4.3 KB/s)           ~5 s per (UNIQUE) label in job (19.5 KB)  |
-  │                                                              (identical copies are merged)      |
-  │                                                              4.6 ~ 5.5 seconds dep. on hardware |
+  │                                                            (identical copies are merged)        |
+  │                                                            4.6 ~ 5.5 seconds dep. on hardware   |
   ▼                                                                                                 |
 bridge: "sent N B in X s"     ← printer is already printing/feeding (same as USB)                   |
   │ 5)  static drain wait, disconnect                     250ms drain                               |
