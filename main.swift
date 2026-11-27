@@ -90,11 +90,11 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   private func reuseLink() {
     guard let p = peripheral, let ch = writeChar else { return }
     started = Date()
-    log("reusing open link: writing \(payload.count) B to \(ch.uuid.uuidString), \(credits) credits carried over")
+    log("reusing open link: writing \(payload.count) B to \(ch.uuid), \(credits) credits carried over")
     if mode == "credit" {
       if credits == 0,
          let st = (p.services ?? []).flatMap({ $0.characteristics ?? [] }).first(where: { $0.uuid == statusUUID }) {
-        log("  no credits left, re-subscribing to \(st.uuid.uuidString)")      // untested: re-trigger the credit handshake
+        log("  no credits left, re-subscribing to \(st.uuid)")      // untested: re-trigger the credit handshake
         p.setNotifyValue(false, for: st); p.setNotifyValue(true, for: st)
       }
       armCreditFallback()
@@ -166,7 +166,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     for s in p.services ?? [] { p.discoverCharacteristics(nil, for: s) }
   }
   func peripheral(_ p: CBPeripheral, didDiscoverCharacteristicsFor s: CBService, error: Error?) {
-    if verbose { for ch in s.characteristics ?? [] { log("  char \(ch.uuid.uuidString) props=0x\(String(ch.properties.rawValue, radix: 16))") } }
+    if verbose { for ch in s.characteristics ?? [] { log("  char \(ch.uuid) props=0x\(String(ch.properties.rawValue, radix: 16))") } }
     for ch in s.characteristics ?? [] where ch.properties.contains(.notify) {
       p.setNotifyValue(true, for: ch)                       // printer status (FF01/FF03)
     }
@@ -176,7 +176,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
             ($0.properties.contains(.write) || $0.properties.contains(.writeWithoutResponse)) })
     else { return }
     writeChar = ch; started = Date()
-    log("writing \(payload.count) B to \(ch.uuid.uuidString): flow \(flow), chunk ≤\(chunkCap) B, delay \(delayMs) ms")
+    log("writing \(payload.count) B to \(ch.uuid): flow \(flow), chunk ≤\(chunkCap) B, delay \(delayMs) ms")
     if mode == "credit" { armCreditFallback() }
     pump()
   }
@@ -241,8 +241,8 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
   // ---- printer status ----
   func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor ch: CBCharacteristic, error: Error?) {
-    if let error = error { log("  subscribe \(ch.uuid.uuidString) failed: \(error)") }
-    else if verbose { log("  notify on \(ch.uuid.uuidString): \(ch.isNotifying)") }
+    if let error = error { log("  subscribe \(ch.uuid) failed: \(error)") }
+    else if verbose { log("  notify on \(ch.uuid): \(ch.isNotifying)") }
   }
   func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
     guard let v = ch.value.map({ [UInt8]($0) }), !v.isEmpty else { return }
@@ -260,7 +260,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
       return
     }
     let hex = v.map { String(format: "%02x", $0) }.joined()
-    if hex != lastNotify { log("  notify \(ch.uuid.uuidString): \(hex)"); lastNotify = hex }
+    if hex != lastNotify { log("  notify \(ch.uuid): \(hex)"); lastNotify = hex }
   }
 
   // ---- cleanup ----
