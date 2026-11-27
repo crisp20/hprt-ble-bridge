@@ -1,29 +1,60 @@
 #!/bin/bash
 # Install the Bluetooth bridge for one HPRT D35BT printer for the CURRENT macOS user.
-# Usage:  sh install.sh XXXX [PORT]      e.g.  sh install.sh B3F8 9100 ; sh install.sh 5676 9101
+# Usage:  sh install.sh [XXXX [PORT]]    e.g.  sh install.sh B3F8 9100 ; sh install.sh  (asks)
 #   XXXX = last 4 hex digits of BT_MAC on the printer's self-test label (or the full D35BT-XXXX name)
 # Run as a normal user (no sudo). An admin dialog appears only if the shared CUPS queue must be created.
 # Every account that prints on this Mac runs this once. Works on macOS 10.12+ (bash 3.2).
 set -euo pipefail
 
-ARG="${1:?usage: $0 XXXX|D35BT-XXXX [PORT]   (last 4 hex of BT_MAC on the self-test label)}"
-ARG="$(printf '%s' "$ARG" | tr '[:lower:]' '[:upper:]')"
-case "$ARG" in D35BT-*) NAME="$ARG" ;; *) NAME="D35BT-$ARG" ;; esac
-SUFFIX="${NAME#D35BT-}"
-PORT="${2:-9100}"
-case "$PORT" in ''|*[!0-9]*) echo "PORT must be a number, e.g. 9100"; exit 1 ;; esac
-[ "$PORT" -ge 1024 ] && [ "$PORT" -le 65535 ] || { echo "PORT must be 1024-65535"; exit 1; }
+PB=/usr/libexec/PlistBuddy
+AGENTS="$HOME/Library/LaunchAgents"
+TTY=/dev/tty
+has_tty() { { : < "$TTY"; } 2>/dev/null; }                       # really openable, not just -r
+ask()     { printf '%s ' "$1" > "$TTY"; a=""; read -r a < "$TTY" || true; echo "${a:-$2}"; }
+port_of() { "$PB" -c 'Print :EnvironmentVariables:HPRT_PORT' "$1" 2>/dev/null || true; }
+
+# ---- printer: from argument, or ask ----
+SUFFIX="${1:-}"
+if [ -z "$SUFFIX" ]; then
+  has_tty || { echo "usage: sh install.sh XXXX [PORT]   (XXXX = last 4 of the printer name)" >&2; exit 2; }
+  echo "Printer name is on the printer's label / self-test page, e.g. D35BT-91DE → 91DE"
+  SUFFIX="$(ask "Printer (last 4 characters):" "")"
+fi
+SUFFIX="$(printf '%s' "$SUFFIX" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]' | sed 's/^D35BT-//')"
+case "$SUFFIX" in
+  [0-9A-F][0-9A-F][0-9A-F][0-9A-F]) ;;
+  *) echo "invalid printer '$SUFFIX' (expected 4 hex characters, e.g. 91DE)" >&2; exit 2 ;;
+esac
+
+NAME="D35BT-$SUFFIX"                       # HPRT_NAME is case-sensitive: always upper case
+LABEL="local.hprt-ble-bridge.$SUFFIX"
+PLIST="$AGENTS/$LABEL.plist"
+
+# ---- port: from argument, or suggest (this printer's old port, else the first free 9100+) ----
+own=""
+if [ -f "$PLIST" ]; then own="$(port_of "$PLIST")"; fi
+used=" "
+for p in "$AGENTS"/local.hprt-ble-bridge.*.plist; do       # loop, not cat|grep: no pipefail trap
+  [ -e "$p" ] && [ "$p" != "$PLIST" ] || continue
+  used="$used$(port_of "$p") "
+done
+suggest="${own:-9100}"
+if [ -z "$own" ]; then
+  while case "$used" in *" $suggest "*) true ;; *) false ;; esac; do suggest=$((suggest + 1)); done
+fi
+
+PORT="${2:-}"
+if [ -z "$PORT" ]; then
+  if has_tty; then PORT="$(ask "Port [$suggest]:" "$suggest")"; else PORT="$suggest"; fi
+fi
+case "$PORT" in ""|*[!0-9]*) echo "invalid port '$PORT'" >&2; exit 2 ;; esac
 
 UIDN="$(id -u)"
 QUEUE="HPRT_D35BT_$SUFFIX"
-LABEL="local.hprt-ble-bridge.$SUFFIX"
 BIN="$HOME/bin/hprt-ble-bridge"
-AGENTS="$HOME/Library/LaunchAgents"
-PLIST="$AGENTS/$LABEL.plist"
 LOGDIR="$HOME/Library/Logs"
 LOG="$LOGDIR/hprt-ble-bridge-$SUFFIX.log"
 SRC="$(cd "$(dirname "$0")" && pwd)"
-PB=/usr/libexec/PlistBuddy
 echo "Printer: $NAME   port: $PORT   queue: $QUEUE   user: $(id -un)"
 
 # ---- 0. preflight ----
