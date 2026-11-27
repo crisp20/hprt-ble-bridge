@@ -38,19 +38,26 @@ The install script creates the Bluetooth queue directly from the installed drive
 
 ## Step 2 – Install the Xcode Command Line Tools
 
-The bridge is compiled locally with `swiftc`.
+The bridge is compiled locally with `swiftc`. Install the Command Line Tools:
 
 ```sh
-xcode-select --install        # skip if `swiftc --version` already works
+# swiftc --version to check if already installed
+# otherwise, run:
+xcode-select --install
+```
+
+```sh
+# ...or already installed but pointing to an incorrect directory, in which case:
+osascript -e 'do shell script "/usr/bin/xcode-select --switch /Library/Developer/CommandLineTools" with administrator privileges'
 ```
 
 ## Step 3 – Find the printer's Bluetooth name
 
 1. Printer on, cover closed (it must **click**), light **blue**.
-2. **Hold FEED ~1.5 s** until the light flashes once, then release → a self-test label prints.
+2. **Hold FEED ~1.5 s** until the light flashes once, then release -> a self-test label prints.
 3. Read `BT_MAC`, e.g. `ba:ab:14:04:b3:f8`. The Bluetooth name is **`D35BT-` + the last 4 hex digits in uppercase**, so here it's `D35BT-B3F8`.
 
-Pairing in System Settings → Bluetooth is **not required**. BLE connects without pairing.
+Pairing in System Settings -> Bluetooth is **not required**. BLE connects without pairing.
 
 ## Step 4 – Get the files
 
@@ -83,7 +90,7 @@ What it does:
 | 1/4   | Compiles `~/bin/hprt-ble-bridge`, with the Bluetooth usage text embedded                                                                                                    |
 | 2/4   | Stops any running bridge, then sends a tiny test job over BLE. The printer **feeds one blank label**, and macOS asks **Terminal** for Bluetooth permission: click **Allow** |
 | 3/4   | Installs and starts the LaunchAgent `~/Library/LaunchAgents/local.hprt-ble-bridge.XXXX.plist`, logging to `~/Library/Logs/hprt-ble-bridge-XXXX.log`                         |
-| 4/4   | Creates the CUPS queue `HPRT_D35BT_XXXX` → `socket://127.0.0.1:PORT/?snmp=false` (a macOS admin dialog asks for an administrator's name and password)                       |
+| 4/4   | Creates the CUPS queue `HPRT_D35BT_XXXX` -> `socket://127.0.0.1:PORT/?snmp=false` (a macOS admin dialog asks for an administrator's name and password)                       |
 
 Re-running the script is safe. It rebuilds the binary and replaces the agent and the queue.
 
@@ -96,24 +103,34 @@ On port collision (installing multiple bridges on the same port), the installati
 
 The background bridge may need its own permission the first time it prints. 
 If a print does nothing and the log shows `bluetooth state: 3`, 
-open **System Settings → Privacy & Security → Bluetooth** and enable `hprt-ble-bridge`.
+open **System Settings -> Privacy & Security -> Bluetooth** and enable `hprt-ble-bridge`.
 
 ## Step 7 – Paper size and print preset (one-time)
 
-1. In any print dialog:
-   **Paper Size → Manage Custom Sizes… → +**, then set width **60 mm**, height **40 mm**, all margins **0**. 
-   Name it e.g. **Small Label**. (The HPRT driver has no 60×40 preset.)
-2. In the print dialog, choose:
-   - Printer: **HPRT D35BT (Bluetooth)**
+Associate the desired print size and setting to this printer.
+
+In any print dialog:
+1. Choose:
+   - Paper Size: **Manage Custom Sizes… -> +**
+   - Set width **60 mm**, height **40 mm**, all margins **0**
+   - Name it e.g. **Small Label**
+2. Choose:
+   - Printer: **HPRT D35BT XXXX (Bluetooth)**
    - Paper Size: **Small Label**
+   - Orientation: **Portrait**
    - Check ✅: **Ignore Scaling and Shrink To Fit Page Width**
    - Page Headers / Footers: all six **--blank--**
-3. **Presets → Save Current Settings as Preset… → "D35BT label"**.
+3. **Presets -> Save Current Settings as Preset…:**.
+   - Preset Name: **"D35BT label"**
+   - Available For: **HPRT D34BT XXXX**
+   - Type: **Print Job Preset**
 
 ## Step 8 – Test
 
 ```sh
-tail -f ~/Library/Logs/hprt-ble-bridge-B3F8.log      # XXXX = your printer id
+tail -f ~/Library/Logs/hprt-ble-bridge-*.log
+# or
+less +F ~/Library/Logs/hprt-ble-bridge-*.log
 ```
 
 Print a page with large black text, for example [sample.html](/sample.html).
@@ -139,7 +156,7 @@ Expected log:
 
 | Symptom                                   | Fix                                                                                                                                                                                                 |
 | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Log: `scanning…` → `timeout … not found`  | Printer off, asleep, stuck, or connected to a phone. **Power-cycle the printer**, close phone apps, and print again                                                                                 |
+| Log: `scanning…` -> `timeout … not found`  | Printer off, asleep, stuck, or connected to a phone. **Power-cycle the printer**, close phone apps, and print again                                                                                 |
 | Log: `bluetooth state: 3`                 | Grant Bluetooth permission (Step 6). This is needed again after rebuilding the binary                                                                                                               |
 | Blank label                               | Run `LC_ALL=C tr -d '\000' < ~/Library/Logs/hprt-last-job-9100.bin \| wc -c` (use your port). A value around 57 means the page image was empty: check "Shrink To Fit Page Width" and the paper size |
 | Log: `refusing … not printer data`        | The queue isn't using the HPRT driver. Re-run `install.sh`                                                                                                                                          |
@@ -246,6 +263,7 @@ sh ./uninstall.sh XXXX|--all [--queue]
 | `HPRT_DELAY_MS` | `20`                                 | Pause per write in `delay`/`paced` modes                                                                                        |
 | `HPRT_VERBOSE`  | off                                  | `1` logs every characteristic and credit                                                                                        |
 | `HPRT_DRAIN_MS` | `250`                                | Drain time (ms) between jobs. Ensures end of job is not lost.                                                                   |
+| `HPRT_MERGE`    | on                                   | Merges byte-identical consecutive labels into one CPCL label with quantity N. 0 = off                                           |
 
 ## References
 

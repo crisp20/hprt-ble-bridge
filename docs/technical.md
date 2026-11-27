@@ -30,7 +30,7 @@ Keep everything that already works (the driver), and replace only the last hop.
 
 ```
 ┌──────────────────────── unchanged from USB ─────────────────────────┐
-│ App ⌘P → CUPS → HPRT PPD → filter "raster-cpcl" → CPCL job (~20 KB) │
+│ App ⌘P -> CUPS -> HPRT PPD -> filter "raster-cpcl" -> CPCL job (~20 KB) │
 └──────────────────────────────────────┬──────────────────────────────┘
                                        │ CUPS built-in backend
                                        ▼
@@ -39,7 +39,7 @@ Keep everything that already works (the driver), and replace only the last hop.
                        hprt-ble-bridge serve     (Swift, LaunchAgent, user session)
                                        │ CoreBluetooth
                                        ▼
-                       D35BT  BLE service FF00 → write FF02, status FF03
+                       D35BT  BLE service FF00 -> write FF02, status FF03
 ```
 
 ### Why a separate helper, and not a CUPS backend?
@@ -69,6 +69,8 @@ The `Info.plist` is embedded into the binary (`-sectcreate __TEXT __info_plist`)
 
 ```
 CUPS connects to :PORT ─► receive whole job ─► sanity check (refuse %!PS / %PDF / empty)
+      │                                        save copy to ~/Library/Logs/hprt-last-job-PORT.bin   (original, unmerged)
+      │                                        merge byte-identical consecutive labels (qty N)
       │                                        save copy to ~/Library/Logs/hprt-last-job-PORT.bin
       ▼
 scan for exact name "D35BT-XXXX" ─► connect ─► discover services
@@ -77,7 +79,7 @@ subscribe FF01 / FF03 (status) ─► printer announces max packet + initial cre
       ▼
 write job to FF02 in ≤100 B packets, one packet per credit
       ▼
-wait 250ms (printer drains) ─► disconnect ─► close TCP ─► CUPS marks job done
+wait 250 ms (tested 50–250 ms) so queued BLE writes complete -> disconnect -> close TCP -> CUPS marks job done
 ```
 
 Design choices:
@@ -108,13 +110,17 @@ It was confirmed empirically: every job showed *writes = credits granted* (198/1
 ### Job format (HPRT `raster-cpcl` filter, 60×40 mm)
 
 ```
-512 × 0x00                 padding / buffer flush
-! 0 203 203 320 1          CPCL header: 203 dpi, label height 320 dots (40 mm), 1 copy
-PW 480                     print width 480 dots (60 mm)
-CG 60 320 0 0 <19200 B>    uncompressed 1-bit bitmap: 60 bytes × 320 rows
-FORM                       feed to the next gap
-PRINT
+512 × 0x00 CRLF            padding / buffer flush                                  514 B
+! 0 203 203 320 1 CRLF     CPCL header: 203 dpi, label height 320 dots (40 mm),    19 B
+                           quantity 1 (the bridge may rewrite it to N)
+PW 480 CRLF                print width 480 dots (60 mm)                              8 B
+CG 60 320 0 0 CRLF         graphics: 60 bytes × 320 rows at x 0, y 0                15 B
+<19,200 B bitmap>          uncompressed 1-bit, no separator after it            19,200 B
+FORM CRLF                  feed to the next gap                                      6 B
+PRINT CRLF                 end of label: print now       
 ```
+
+one label = 19,255 B; job = 514 + 19,255 × labels (copies included).
 
 A 60×40 mm label is therefore **~19.7 KB regardless of content**,
 because the driver sends the whole bitmap, white space included.
@@ -125,38 +131,41 @@ because the driver sends the whole bitmap, white space included.
 
 ```
 click Print (system print dialog)
-  │ 1) Firefox renders the page → PDF → CUPS              ~1 s
+  │ 1) Firefox renders the page -> PDF -> CUPS            ~1 s
   ▼
-  │ 2) CUPS filters: cgpdftoraster → raster-cpcl          <1 s
+  │ 2) CUPS filters: cgpdftoraster -> raster-cpcl         <1 s
   │    socket backend connects to 127.0.0.1:PORT          ~0 s (was ~4 s, see "snmp=false" below)
   ▼
-bridge: "job received"                                <--------------------------------------------\
-  │ 3)  BLE connect + service discovery + subscribe       ~0.6 s                                   |
-  ▼                                                                                                |
-bridge: "writing N B"                                                                              |
-  │ 4)  BLE transfer, printer-paced (~4.3 KB/s)           ~4.6 s per label in job (19.5 KB)        |
-  ▼                                                                                                |
-bridge: "sent N B in X s"     ← printer is already printing/feeding (same as USB)                  |
-  │ 5)  static drain wait, disconnect                     250ms delay for next job in queue        |
-  ▼                                                                                                |
-bridge: "job done" → CUPS marks the job complete      --- subsequent queued jobs ------------------/
+bridge: "job received"                                <---------------------------------------------\
+  │ 3)  BLE connect + service discovery + subscribe       ~0.6 s                                    |
+  ▼                                                                                                 |
+bridge: "writing N B"                                                                               |
+  │ 4)  BLE transfer, printer-paced (~4.3 KB/s)           ~5 s per (UNIQUE) label in job (19.5 KB)  |
+  │                                                              (identical copies are merged)      |
+  │                                                              4.6 ~ 5.5 seconds dep. on hardware |
+  ▼                                                                                                 |
+bridge: "sent N B in X s"     ← printer is already printing/feeding (same as USB)                   |
+  │ 5)  static drain wait, disconnect                     250ms drain                               |
+  │                                                             delays only the nex queued job      |
+  ▼                                                                                                 |
+bridge: "job done" -> CUPS marks the job complete      --- subsequent queued jobs -------------------/
 ```
 
 ### Print time: BLE vs USB (60 × 40 mm labels)
 
-| Stage / factor                                 | BLE, 1 label (19.5 KB)                               | BLE, 2 labels (39 KB, one job) | USB, 1 label (estimated)      |
-| ---------------------------------------------- | ---------------------------------------------------- | ------------------------------ | ----------------------------- |
-| Firefox + print dialog                         | ~1 s                                                 | ~1 s                           | ~1 s                          |
-| CUPS filters (`cgpdftoraster` → `raster-cpcl`) | <1 s                                                 | <1 s                           | <1 s                          |
-| CUPS backend                                   | ~0 s (`socket`, `?snmp=false`; was ~4 s)             | ~0 s                           | ~0 s (`usb`)                  |
-| Link setup                                     | ~0.6 s connect + discovery                           | ~0.6 s (once per job)          | none (already enumerated)     |
-| Transfer                                       | ~4.6 s                                               | ~9 s                           | ≪0.1 s                        |
-| **Click → last byte sent**                     | **~7 s**                                             | **~11.5 s**                    | **~1.5–2 s**                  |
-| After last byte                                | 250ms drain wait, disconnect (label already printed) | same                           | none                          |
-| Packet size                                    | ≤100 B (printer cap, FF03 `02 64 00`)                | ≤100 B                         | 64 B bulk, back-to-back       |
-| Flow control                                   | 1 packet per credit (FF03 `01 nn`)                   | 391 writes / 392 credits       | hardware handshake, no stalls |
-| Throughput                                     | ~4.3 KB/s                                            | ~4.3 KB/s                      | hundreds of KB/s              |
-| Source                                         | bridge + CUPS logs (Mac mini)                        | bridge + CUPS logs (Mac mini)  | not measured                  |
+| Stage / factor                                  | BLE, 1 label (19.5 KB)                               | BLE, 2 labels (39 KB, one job) | USB, 1 label (estimated)      |
+| ----------------------------------------------- | ---------------------------------------------------- | ------------------------------ | ----------------------------- |
+| Firefox + print dialog                          | ~1 s                                                 | ~1 s                           | ~1 s                          |
+| CUPS filters (`cgpdftoraster` -> `raster-cpcl`) | <1 s                                                 | <1 s                           | <1 s                          |
+| CUPS backend                                    | ~0 s (`socket`, `?snmp=false`; was ~4 s)             | ~0 s                           | ~0 s (`usb`)                  |
+| Link setup                                      | ~0.6 s connect + discovery                           | ~0.6 s (once per job)          | none (already enumerated)     |
+| Transfer                                        | ~4.6 s                                               | ~9 s                           | ≪0.1 s                        |
+| **Click -> last byte sent**                     | **~7 s**                                             | **~11.5 s**                    | **~1.5–2 s**                  |
+| After last byte                                 | 250ms drain wait, disconnect (label already printed) | same                           | none                          |
+| Packet size                                     | ≤100 B (printer cap, FF03 `02 64 00`)                | ≤100 B                         | 64 B bulk, back-to-back       |
+| Flow control                                    | 1 packet per credit (FF03 `01 nn`)                   | 391 writes / 392 credits       | hardware handshake, no stalls |
+| Throughput                                      | ~4.3 KB/s                                            | ~4.3 KB/s                      | hundreds of KB/s              |
+| Source                                          | bridge + CUPS logs (Mac mini)                        | bridge + CUPS logs (Mac mini)  | not measured                  |
 
 **The bottleneck is the printer's BLE firmware.**
 Every Mac reaches about the same speed:
@@ -165,6 +174,8 @@ Bigger packets or unpaced writes overflow the printer (`CBErrorDomain 6`),
 and the printer then stops advertising until it's power-cycled.
 
 ### How we got from ~90 s to ~4.5 s per label
+
+For comparison: 10 label print for USB connection is 9.3 seconds.
 
 Bluetooth transfer (per label):
 
@@ -175,13 +186,14 @@ Bluetooth transfer (per label):
 | `delay` 100 B / 20 ms         | Acknowledge each write + pause                         | ~30 s              | ✅                                                |
 | **`credit`**                  | Send only what the printer grants, no acknowledgements | **~4.6 s**         | ✅ default                                        |
 
-End to end (2 labels, click → last byte sent):
+End to end (2 labels, click -> last byte print (all printed)):
 
-| Step | Change                                          | Saved  | Total       |
-| ---- | ----------------------------------------------- | ------ | ----------- |
-| 0    | First working bridge, `delay` 100 B / 20 ms     | –      | ~66 s*      |
-| 1    | `credit` flow control                           | ~51 s  | ~16 s       |
-| 2    | Queue URI `socket://127.0.0.1:PORT/?snmp=false` | ~3–4 s | **~11.5 s** |
+| Step | Change                                          | Saved                           | Total                                                      |
+| ---- | ----------------------------------------------- | ------------------------------- | ---------------------------------------------------------- |
+| 0    | First working bridge, `delay` 100 B / 20 ms     | –                               | ~66 s*                                                     |
+| 1    | `credit` flow control                           | ~51 s                           | ~16 s                                                      |
+| 2    | Queue URI `socket://127.0.0.1:PORT/?snmp=false` | ~3–4 s                          | ~11.5 s                                                    |
+| 3    | Merge identical copies into CPCL quantity       | ~4.5 s per extra identical copy | ~7 s if the 2 labels are identical; ~11.5 s if they differ |
 
 \* Estimated from ~30 s per label in `delay` mode. Steps 1–2 are measured.
 
@@ -191,15 +203,19 @@ Nothing answers SNMP on `127.0.0.1`, so every job waited for nothing.
 The URI option needs the `/` before the `?`: `socket://127.0.0.1:9100?snmp=false` is rejected as `Bad device-uri`.
 See [apple/cups #5256](https://github.com/apple/cups/issues/5256) and [CUPS AppSocket](https://www.cups.org/doc/network.html#SOCKET).
 
+**Identical copies**: for batches of identical labels,
+the data are deduplicated and sent as a single label + a copy count,
+thereby only costing one label transfer time. (*3 copies: 58,279 -> 19,769 B, ~13 s -> 4.7 s*)
+
 ### Considered and rejected
 
-| Idea                                 | Would save                  | Why not                                                                    |
-| ------------------------------------ | --------------------------- | -------------------------------------------------------------------------- |
-| Bigger packets (180 B)               | –                           | Printer disconnects (`CBErrorDomain 6`)                                    |
-| Lower `HPRT_GAP_MS` / unpaced writes | –                           | The printer's credits set the rate; unpaced writes overflow it             |
-| Crop or compress the bitmap          | ~1.5–3× less transfer time  | Changes the job the driver produced; not reliable enough                   |
-| Keep the BLE link open after a job   | ~0.6 s per back-to-back job | Too little gain; blocks phones, the app's Chrome button and other accounts |
-| Shorter drain / close TCP early      | 50ms per back-to-back job   | Wait time to preserver end of job. Already negligible.                     |
+| Idea                                 | Would save                  | Why not                                                                                |
+| ------------------------------------ | --------------------------- | -------------------------------------------------------------------------------------- |
+| Bigger packets (180 B)               | –                           | Printer disconnects (`CBErrorDomain 6`)                                                |
+| Lower `HPRT_GAP_MS` / unpaced writes | –                           | The printer's credits set the rate; unpaced writes overflow it                         |
+| Crop or compress the bitmap          | ~1.5–3× less transfer time  | Changes the job the driver produced; not reliable enough                               |
+| Keep the BLE link open after a job   | ~0.6 s per back-to-back job | Too little gain; blocks phones, the app's Chrome button and other accounts             |
+| Shorter drain (< 250 ms)             | < 0.2 s per queued job      | 50 ms also worked; 250 ms kept as margin for slower Macs/stacks. Negligible either way |
 
 ### Re-measuring
 
@@ -223,7 +239,7 @@ sudo cupsctl --no-debug-logging
 | A mid-job disconnect                                   | Printer stops advertising                                                                             | Power-cycle the printer                                                                                |
 | Single BLE connection                                  | A connected phone app blocks the Mac                                                                  | Close phone apps                                                                                       |
 | Bridges run per user; one port per printer             | On a shared Mac only one logged-in user's bridge can bind a given port (others log `FATAL` and retry) | Fine for sequential logins; concurrent fast user switching is untested                                 |
-| Rebuilt binary has a new signature                     | TCC may ask for Bluetooth permission again                                                            | Re-allow under Privacy & Security → Bluetooth                                                          |
+| Rebuilt binary has a new signature                     | TCC may ask for Bluetooth permission again                                                            | Re-allow under Privacy & Security -> Bluetooth                                                         |
 
 ## 7. Files
 

@@ -30,6 +30,7 @@ let writeUUIDs = (env["HPRT_CHAR"].map { [$0] } ??
                   ["FF02", "49535343-8841-43F4-A8D4-ECBE34729BB3", "FFE1", "2AF1"]).map(CBUUID.init(string:))
 let listenPort = UInt16(env["HPRT_PORT"] ?? "") ?? 9100
 let poweredOn = 5                                          // same raw value in CBCentralManagerState and CBManagerState
+let mergeCopies = env["HPRT_MERGE"] != "0"     // merge byte-identical consecutive labels into one CPCL quantity
 
 final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
   private let q = DispatchQueue(label: "ble")
@@ -83,9 +84,17 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     log("connecting to \(p.name ?? "?")"); central.connect(p, options: nil)
   }
   func centralManagerDidUpdateState(_ c: CBCentralManager) {
-    log("bluetooth state: \(c.state.rawValue)  (5 = poweredOn, 3 = unauthorized)")
-    if c.state.rawValue == poweredOn && pendingStart { pendingStart = false; findPeripheral() }
+      let s = c.state.rawValue
+      switch s {
+        case 2:    log("bluetooth state: 2 (unsupported) - FATAL: this Mac has no Bluetooth LE. Needs a Bluetooth 4.0+ Mac or a USB BLE adapter (BCM20702).")
+        case 3:    log("bluetooth state: 3 (unauthorized) - allow Bluetooth for hprt-ble-bridge in Privacy settings")
+        case 4:    log("bluetooth state: 4 (powered off) - turn Bluetooth on; the bridge resumes by itself")
+        case 0, 1: log("bluetooth state: \(s) (\(s == 0 ? "unknown" : "resetting"), waiting)")
+        default:   log("bluetooth state: \(s) (5 = poweredOn)")
+      }
+      if s == poweredOn && pendingStart { pendingStart = false; findPeripheral() }
   }
+
   func centralManager(_ c: CBCentralManager, didDiscover p: CBPeripheral,
                       advertisementData ad: [String: Any], rssi: NSNumber) {
     guard ((ad[CBAdvertisementDataLocalNameKey] as? String) ?? p.name) == targetName else { return }
@@ -252,6 +261,94 @@ func readAll(_ c: Int32) -> Data? {
   }
 }
 
+/// Splits a raster-cpcl job into labels ("! 0 …" up to "PRINT") and merges runs of
+/// byte-identical consecutive labels into one label with CPCL quantity N.
+/// data == nil: send the original job; summary says why.
+func mergeIdenticalLabels(_ job: Data) -> (data: Data?, summary: String) {
+    let b = [UInt8](job), n = b.count
+    let LF: UInt8 = 0x0A, CR: UInt8 = 0x0D
+    let header = Array("! 0 ".utf8), cg = Array("CG ".utf8), eg = Array("EG ".utf8)
+
+    func matches(_ p: [UInt8], at k: Int) -> Bool {
+        return k + p.count <= n && b[k..<k + p.count].elementsEqual(p)
+    }
+    func lineEnd(from k: Int) -> Int? {
+        var i = k
+        while i < n { if b[i] == LF { return i }; i += 1 }
+        return nil
+    }
+    func text(_ from: Int, _ lf: Int) -> String {            // line without CR/LF
+        var e = lf
+        while e > from && b[e - 1] == CR { e -= 1 }
+        return String(bytes: b[from..<e], encoding: .ascii) ?? ""
+    }
+    func skip(_ why: String) -> (data: Data?, summary: String) { return (nil, "not merged: " + why) }
+
+    // prefix (512 x 0x00 + CRLF) = everything before the first header
+    var first = 0
+    while first < n && !matches(header, at: first) { first += 1 }
+    if first >= n { return skip("no CPCL header found") }
+
+    var labels: [(start: Int, qtyEnd: Int, end: Int)] = []   // qtyEnd: index just after the quantity "1"
+    var i = first
+    while true {
+        while i < n && (b[i] == CR || b[i] == LF) { i += 1 }
+        if i >= n { break }
+        let no = labels.count + 1
+        guard matches(header, at: i), let hLF = lineEnd(from: i) else { return skip("label \(no): no header at byte \(i)") }
+        let hText = text(i, hLF), h = hText.split(separator: " ")
+        guard h.count == 6, h[5] == "1" else { return skip("label \(no): header '\(hText)' is not quantity 1") }
+        var qtyEnd = hLF
+        while qtyEnd > i && b[qtyEnd - 1] == CR { qtyEnd -= 1 }
+
+        var j = hLF + 1, done = false
+        while j < n && !done {
+            guard let le = lineEnd(from: j) else { return skip("label \(no): line at byte \(j) has no line end") }
+            if matches(cg, at: j) || matches(eg, at: j) {
+                // measured layout: "CG w h x y" CRLF, then exactly w*h bitmap bytes, then the next command
+                let f = text(j, le).split(separator: " ").dropFirst().map { Int(String($0)) }
+                guard f.count == 4, let w = f[0], let ht = f[1], w > 0, ht > 0 else {
+                    return skip("label \(no): unexpected graphics line '\(text(j, le))'")
+                }
+                j = le + 1 + w * ht                            // skip the bitmap: it may contain any byte
+                guard j <= n else { return skip("label \(no): bitmap runs past the end of the job") }
+                continue
+            }
+            if text(j, le) == "PRINT" { done = true }
+            j = le + 1
+        }
+        guard done else { return skip("label \(no): no PRINT") }
+        labels.append((i, qtyEnd, j))
+        i = j
+    }
+
+    var out = Array(b[0..<first]), runs: [Int] = [], g = 0
+    while g < labels.count {
+        let L = labels[g], body = b[L.start..<L.end]
+        var run = 1
+        while g + run < labels.count && run < 1024 {           // CPCL quantity max 1024
+            let M = labels[g + run]
+            guard M.end - M.start == body.count, b[M.start..<M.end].elementsEqual(body) else { break }
+            run += 1
+        }
+        if run == 1 {
+            out += body
+        } else {
+            out += b[L.start..<(L.qtyEnd - 1)]                 // header without its "1"
+            out += Array(String(run).utf8)
+            out += b[L.qtyEnd..<L.end]
+        }
+        runs.append(run); g += run
+    }
+    if runs.count == labels.count {
+        return skip(labels.count == 1 ? "only 1 label" : "\(labels.count) labels, no two consecutive ones identical")
+    }
+    out += b[labels[labels.count - 1].end..<n]
+    let qty = runs.map { String($0) }.joined(separator: "+")
+    return (out.withUnsafeBufferPointer { Data(buffer: $0) }, "merged \(labels.count) labels into \(runs.count) (qty \(qty))")
+}
+
+
 let printer = BLEPrinter()
 let args = CommandLine.arguments
 
@@ -270,13 +367,21 @@ if args.count >= 3 && args[1] == "send" {                      // one-shot test
     while true {
       let c = accept(fd, nil, nil)
       if c < 0 { if errno == EINTR { continue }; fatal("accept(): \(errnoText())") }
+      log("connection accepted")
       var tv = timeval(tv_sec: 60, tv_usec: 0)                 // don't hang forever on a stalled sender
       _ = setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
       guard let data = readAll(c) else { close(c); continue }
       log("job received: \(data.count) bytes")
-      try? data.write(to: URL(fileURLWithPath: "/tmp/hprt-last-job-\(listenPort).bin"))
+      try? data.write(to: URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs/hprt-last-job-\(listenPort).bin"))
+      var outJob = data
+      if mergeCopies {
+        let m = mergeIdenticalLabels(data)
+        if let d = m.data { outJob = d }
+        log("\(m.summary): \(data.count) → \(outJob.count) B")
+      }
+
       let sem = DispatchSemaphore(value: 0)
-      printer.send(data) { err in log(err.map { "job ERROR: \($0)" } ?? "job done"); sem.signal() }
+      printer.send(outJob) { err in log(err.map { "job ERROR: \($0)" } ?? "job done"); sem.signal() }
       sem.wait(); close(c)                                     // close → CUPS marks job complete
     }
   }
