@@ -14,12 +14,21 @@ Background and design: see [TECHNICAL.md](TECHNICAL.md).
 
 ## Requirements
 
-| Item                   | Notes                                                                       |
-| ---------------------- | --------------------------------------------------------------------------- |
-| Mac with Bluetooth LE  | Any recent Mac (Intel or Apple Silicon)                                     |
-| Admin rights           | Needed once, for `lpadmin` (creating the print queue)                       |
-| HPRT D35BT, powered on | No other bluetooth devices (i.e. mobile phone) connected to it during setup |
-| This repo              | `main.swift`, `Info.plist`, `install.sh`                                    |
+| Item                               | Notes                                                                                      |
+| ---------------------------------- | ------------------------------------------------------------------------------------------ |
+| Hardware supporting Bluetooth LE   | \*                                                                                         |
+| macOS compatible with swift 4.0.3+ | This translates to 'macOS 10.12.X+'                                                        |
+| Admin rights                       | Needed once for creating the print queue (`lpadmin`)                                       |
+| HPRT D35BT printer                 | Powered on and no other bluetooth devices (i.e. mobile phone) connected to it during setup |
+
+\* Run the following command in a terminal:
+
+```sh
+system_profiler SPBluetoothDataType | grep -iE 'LMP Version|Low Energy|Chipset|Firmware'
+```
+
+If the output shows `Bluetooth Low Energy Supported: No`, then your machine's hardware is unsupported.
+Consider installing a **USB Bluetooth 4.0 adapter**.
 
 ---
 
@@ -29,27 +38,35 @@ Background and design: see [TECHNICAL.md](TECHNICAL.md).
 
 1. Download **"Mac Drivers for D35BT"** from <https://download.hprt.com/Downloads.html>.
 2. Run the installer.
-3. Verify:
+3. Verify installation:
    ```sh
    lpinfo -m | grep -i d35bt
    ```
    You should see at least one line (e.g. `… HPRT D35BT, 1.4.10`).
 
-You do **not** need to add a USB printer first. 
+You do **not** need to add a USB printer first.
 The install script creates the Bluetooth queue directly from the installed driver.
 
 ### Step 2 – Install the Xcode Command Line Tools
 
 The bridge is compiled locally with `swiftc`. Install the Command Line Tools:
 
+To verify installation:
 ```sh
-# swiftc --version to check if already installed
-# otherwise, run:
+swiftc --version 
+
+# expected output
+swift-driver version: <...> Apple Swift version: <...>
+Target: <...>
+```
+
+To install:
+```sh
 xcode-select --install
 ```
 
+Already installed but pointing to an incorrect directory - to fix the targetted directory (requires admin):
 ```sh
-# ...or already installed but pointing to an incorrect directory, in which case:
 osascript -e 'do shell script "/usr/bin/xcode-select --switch /Library/Developer/CommandLineTools" with administrator privileges'
 ```
 
@@ -57,27 +74,115 @@ osascript -e 'do shell script "/usr/bin/xcode-select --switch /Library/Developer
 
 1. Printer on, cover closed (it must **click**), light **blue**.
 2. **Hold FEED ~1.5 s** until the light flashes once, then release -> a self-test label prints.
-3. Read `BT_MAC`, e.g. `ba:ab:14:04:b3:f8`. The Bluetooth name is **`D35BT-` + the last 4 hex digits in uppercase**, so here it's `D35BT-B3F8`.
+3. Read `BT_MAC`. The Bluetooth name is **`D35BT-` + the last 4 hex digits in uppercase**. e.g. `BT_MAC: ba:ab:14:04:b3:f8` -> `D35BT-B3F8`.
 
-Pairing in System Settings -> Bluetooth is **not required**. BLE connects without pairing.
+Pairing in System Settings -> Bluetooth is **not required** for installation of the bridge.
 
 ### Step 4 – Run the install / uninstall script
 
 Run the following script in a terminal:
 
+For the latest stable release:
 ```sh
-# Production version
-curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | sh
-
-# Specific version
-curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | sh -s -- <release name>
+curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | \
+sh
 ```
 
-The script will ask:
- 1. Whether you want to uninstall existing bridges,
- 2. Whether you want to install new bridges,
- 3. (if continuing) the name of the printer being set up,
- 4. admin accounts & permission grants where necessary.
+For a specific release:
+```sh
+curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | \
+sh -s -- <release name>
+```
+
+Once run, an installation script be executed.
+
+Example:
+```console
+# user executes the installation command
+foo@bar >_ curl -fsSL https://raw.githubusercontent.com/crisp20/hprt-ble-bridge/main/get.sh | sh -s
+
+== downloading crisp20/hprt-ble-bridge v0.1.1
+   26 KB
+== bridges already installed:
+   B3F8
+
+# user is prompted the option to perform a full uninstall for a fresh installation
+# answer 'y' / 'n', default 'n'
+# if will install bridges for multiple printer, answer 'n'
+Uninstall all of them first (fresh start)? [y/N] y
+removed bridge local.hprt-ble-bridge.B3F8 (port 9100)
+removed binary, logs and Bluetooth permission for justin
+Kept shared queue(s) (other accounts may use them): HPRT_D35BT_B3F8
+Re-run with --queue to delete them.
+Done.
+
+# user is asked to supply the last 4 characters of the printer name
+# as well as the network port this bridge should run on
+# default port: 9100
+# the specific port does not matter, as long as it is not in use by another application
+# if it is in use, the script will simply prompt the next available port (i.e. 9101)
+Printer name is on the printer's label / self-test page, e.g. D35BT-ABCD → ABCD
+Printer (last 4 characters): B3F8
+Port [9100]:
+Printer: D35BT-B3F8   port: 9100   queue: HPRT_D35BT_B3F8   user: <account username>
+
+# the bridge source code being compiled
+== 1/4 build bridge
+
+== 2/4 Bluetooth check (one blank label feeds)
+
+# binary compiled, attempting a connection with the printer
+# program will ask for bluetooth permission - allow
+(macOS 10.15+: allow Bluetooth if asked)
+# expected bluetooth state: 5. If otherwise, check the [Troubleshooting] section                           
+2026-11-27 17:11:36.339 +08:00 bluetooth state: 5 (5 = poweredOn)
+2026-11-27 17:11:36.340 +08:00 scanning for D35BT-B3F8…
+2026-11-27 17:11:36.676 +08:00 connecting to D35BT-B3F8
+2026-11-27 17:11:37.494 +08:00 writing 31 B to FF02: flow delay, chunk ≤100 B, delay 20 ms
+2026-11-27 17:11:37.917 +08:00   printer max packet: 100 B
+2026-11-27 17:11:37.973 +08:00 sent 31 B in 0.5 s (1 writes, 4 credits granted)
+2026-11-27 17:11:37.973 +08:00 drain 250 ms
+2026-11-27 17:11:38.234 +08:00 OK: sent 31 bytes
+
+# user is shown the bridge settings
+# user can:
+#   1. use recommended settings (by answering 'r'), 
+#   2. customize the settings (by answering 'c', after editing user will asked to confirm again),
+#   3. accept the current settings (by answering 'y')
+# It is highly recommended you leave the settings on the recommended values
+# unless you know what they do - reference [Bridge settings] section
+== 3/4 LaunchAgent local.hprt-ble-bridge.B3F8
+Bridge settings:                                                                           
+  HPRT_FLOW          credit  [recommend to leave as default]
+  HPRT_CHUNK         100     [recommend to leave as default]
+  HPRT_DELAY_MS      20      [recommend to leave as default]
+  HPRT_GAP_MS        8       [recommend to leave as default]
+  HPRT_DRAIN_MS      250     [recommend to leave as default]
+  HPRT_CHAR          (auto)  [recommend to leave as default]
+  HPRT_MERGE         1       [can customize as desired]
+  HPRT_KEEPALIVE_MS  30000   [can customize as desired]
+  HPRT_VERBOSE       0       [can customize as desired]
+  HPRT_LOG_MAX_KB    1024    [can customize as desired]
+Use these settings? [Y]es / [r]ecommended / [c]ustomise:
+
+# program will ask for admin credentials to create the print queue
+== 4/4 CUPS queue HPRT_D35BT_B3F8 (shared by all accounts)
+Asking for an administrator to create the shared print queue…                              
+queue created
+
+2026-11-27 17:11:38.284 +08:00 listening on 127.0.0.1:9100 for D35BT-B3F8 (flow credit, chunk 100, delay 20 ms), drain 250 ms
+2026-11-27 17:11:38.312 +08:00 bluetooth state: 5 (5 = poweredOn)
+Done. Print to 'HPRT D35BT B3F8 (Bluetooth)'.
+
+# reminding user to create the printer settings - see the next step
+Create the 60 x 40 mm paper size (margins 0) and save print settings for this printer.
+
+# if more bridges need to be installed, answer 'y'
+Install another printer on this Mac? [y/N] n
+
+# logs for print bridges can be seen in these log files
+== done. Logs: ~/Library/Logs/hprt-ble-bridge-*.log
+```
 
 ### Step 5 – Paper size and print preset (one-time)
 
@@ -211,19 +316,24 @@ lpstat -v | grep D35BT                        # queue gone, others unchanged
 
 ---
 
-## Bridge settings (plist `EnvironmentVariables`)
+## Bridge settings 
+
+plist `EnvironmentVariables`
 
 | Variable            | Default                              | Meaning                                                                                                                         |
 | ------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `HPRT_NAME`         | `D35BT-B3F8`                         | Exact BLE name, case-sensitive                                                                                                  |
+| `HPRT_NAME`         | /                                    | Exact BLE name, case-sensitive                                                                                                  |
 | `HPRT_PORT`         | `9100`                               | TCP port on 127.0.0.1 that CUPS connects to; must match the queue URI                                                           |
 | `HPRT_FLOW`         | `delay` (`install.sh` sets `credit`) | `credit` = printer-driven flow control (~5 s), `delay` = acknowledge + pause (~30 s), `paced` = fixed pause, no acknowledgement |
 | `HPRT_CHUNK`        | `100`                                | Max bytes per BLE write. The printer itself caps this at 100                                                                    |
 | `HPRT_DELAY_MS`     | `20`                                 | Pause per write in `delay`/`paced` modes                                                                                        |
-| `HPRT_VERBOSE`      | off                                  | `1` logs every characteristic and credit                                                                                        |
+| `HPRT_GAP_MS`       | `8`                                  | Interval (ms) between packets in credit mode (relevant for macOS 10.12 only)                                                    |
 | `HPRT_DRAIN_MS`     | `250`                                | Drain time (ms) between jobs. Ensures end of job is not lost.                                                                   |
-| `HPRT_MERGE`        | on                                   | Merges byte-identical consecutive labels into one CPCL label with quantity N. 0 = off                                           |
+| `HPRT_CHAR`         | `<empty string>`                     | Write characteristic UUID.                                                                                                      |
+| `HPRT_MERGE`        | `<on>`                               | Merges byte-identical consecutive labels into one CPCL label with quantity N. 0 = off                                           |
 | `HPRT_KEEPALIVE_MS` | `30000`                              | Keep alive (ms) for the printer connection.                                                                                     |
+| `HPRT_VERBOSE`      | `<off>`                              | `1` logs every characteristic and credit                                                                                        |
+| `HPRT_LOG_MAX_KB`   | `1024`                               | Max size of log file before being rotated                                                                                       |
 
 ## References
 
