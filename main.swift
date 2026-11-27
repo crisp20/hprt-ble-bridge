@@ -13,6 +13,18 @@ let logFmt: DateFormatter = {
 func log(_ s: String) {
   FileHandle.standardError.write("\(logFmt.string(from: Date())) \(s)\n".data(using: .utf8)!)
 }
+func rotateLogIfNeeded() {
+  guard let path = logPath,
+        let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+        let size = (attrs[.size] as? NSNumber)?.intValue, size > logMaxBytes else { return }
+  fflush(stdout); fflush(stderr)
+  let old = path + ".bk"
+  unlink(old)                       // keep only one old copy
+  rename(path, old)
+  freopen(path, "a", stdout)        // point stdout/stderr at a fresh file
+  freopen(path, "a", stderr)
+  log("log rotated: previous \(size / 1024) KB moved to \(old)")
+}
 func errnoText() -> String { return String(cString: strerror(errno)) }
 func fatal(_ s: String) -> Never { log("FATAL: \(s)"); exit(1) }
 
@@ -31,6 +43,9 @@ let writeUUIDs = (env["HPRT_CHAR"].map { [$0] } ??
 let listenPort = UInt16(env["HPRT_PORT"] ?? "") ?? 9100
 let poweredOn = 5                                          // same raw value in CBCentralManagerState and CBManagerState
 let mergeCopies = env["HPRT_MERGE"] != "0"     // merge byte-identical consecutive labels into one CPCL quantity
+let keepAliveMs = max(0, Int(env["HPRT_KEEPALIVE_MS"] ?? "") ?? 0)   // 0 = disconnect after every job (today)
+let logPath = ProcessInfo.processInfo.environment["HPRT_LOG"]          // set by the plist
+let logMaxBytes = (Int(ProcessInfo.processInfo.environment["HPRT_LOG_MAX_KB"] ?? "") ?? 1024) * 1024
 
 final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
   private let q = DispatchQueue(label: "ble")
@@ -49,6 +64,11 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   private var pendingStart = false
   private var job = 0
   private var mode = flow
+  private var idleGen = 0 
+  private var closing = false           // we called cancelPeripheralConnection on a connected link
+  private var startAfterClose = false   // a job arrived while closing
+  private var quietDisconnect = false   // we called cancel ourselves; don't log the callback as a drop
+  private var retriedLink = false       // one reconnect per job when the FF03 handshake is missing
 
   override init() { super.init(); central = CBCentralManager(delegate: self, queue: q) }
 
@@ -61,10 +81,19 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     }
     q.async {
       self.job += 1; let myJob = self.job
+      self.idleGen += 1
       self.completion = completion; self.payload = Data(data); self.offset = 0
-      self.writeChar = nil; self.credits = 0; self.granted = 0; self.writes = 0
-      self.maxLen = nil; self.draining = false; self.pumpScheduled = false; self.lastNotify = ""; self.mode = flow
-      if self.central.state.rawValue == poweredOn { self.findPeripheral() } else { self.pendingStart = true }
+      self.granted = 0; self.writes = 0; self.retriedLink = false // per-job stats only
+      self.draining = false; self.pumpScheduled = false; self.lastNotify = ""; self.mode = flow
+      if self.closing, self.peripheral?.state == .disconnected { self.closing = false }   // safety
+      if let p = self.peripheral, p.state == .connected, self.writeChar != nil, !self.closing {
+        self.reuseLink()
+      } else {
+        self.writeChar = nil; self.credits = 0; self.maxLen = nil
+        if self.closing { self.startAfterClose = true; log("link closing, reconnecting after disconnect") }
+        else if self.central.state.rawValue == poweredOn { self.findPeripheral() }
+        else { self.pendingStart = true }
+      }
       self.q.asyncAfter(deadline: .now() + 20) {
         if self.job == myJob && self.writeChar == nil {
           self.finish(BridgeError(description: "timeout: \(targetName) not found / no writable characteristic"))
@@ -72,6 +101,41 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
       }
     }
   }
+
+  private func reuseLink() {
+    guard let p = peripheral, let ch = writeChar else { return }
+    started = Date()
+    log("reusing open link: writing \(payload.count) B to \(ch.uuid), \(credits) credits carried over")
+    if mode == "credit" {
+      if credits == 0,
+         let st = (p.services ?? []).flatMap({ $0.characteristics ?? [] }).first(where: { $0.uuid == statusUUID }) {
+        log("  no credits left, re-subscribing to \(st.uuid)")      // untested: re-trigger the credit handshake
+        p.setNotifyValue(false, for: st); p.setNotifyValue(true, for: st)
+      }
+      armCreditFallback()
+    }
+    pump()
+  }
+
+  private func armCreditFallback() {
+    let myJob = job
+    let wait: Double = retriedLink ? 3 : 1.5
+    q.asyncAfter(deadline: .now() + wait) {
+      guard self.job == myJob, self.completion != nil, self.granted == 0,
+            self.offset < self.payload.count else { return }
+      if !self.retriedLink && self.offset == 0, let p = self.peripheral, p.state == .connected {
+        self.retriedLink = true                               // nothing sent yet → safe to reconnect
+        log("  no FF03 handshake within 1.5 s - reconnecting once")
+        self.writeChar = nil; self.credits = 0; self.maxLen = nil
+        self.closing = true; self.quietDisconnect = true; self.startAfterClose = true
+        self.central.cancelPeripheralConnection(p)            // didDisconnect → findPeripheral()
+        return
+      }
+      log("  no FF03 credits within \(Int(wait)) s - falling back to delay mode for this job")
+      self.mode = "delay"; self.pump()
+    }
+  }
+
 
   // ---- discovery / connection ----
   private func findPeripheral() {
@@ -105,9 +169,19 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     finish(error ?? BridgeError(description: "connect failed"))
   }
   func centralManager(_ c: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
+    let ours = closing || quietDisconnect
+    closing = false; quietDisconnect = false; writeChar = nil; credits = 0; maxLen = nil
+    idleGen += 1
+    if startAfterClose {                                    // a job was waiting for our own disconnect
+      startAfterClose = false
+      if central.state.rawValue == poweredOn { findPeripheral() } else { pendingStart = true }
+      return
+    }
     if completion != nil {
       log("  disconnected after \(offset)/\(payload.count) B")
       finish(error ?? BridgeError(description: "disconnected mid-job"))
+    } else if !ours {
+      log("link dropped while idle\(error.map { ": \($0.localizedDescription)" } ?? ""); next job reconnects")
     }
   }
 
@@ -128,15 +202,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
     else { return }
     writeChar = ch; started = Date()
     log("writing \(payload.count) B to \(ch.uuid): flow \(flow), chunk ≤\(chunkCap) B, delay \(delayMs) ms")
-    if mode == "credit" {
-      let myJob = job
-      q.asyncAfter(deadline: .now() + 3) {
-        if self.job == myJob && self.completion != nil && self.granted == 0 {
-          log("  no FF03 credits within 3 s – falling back to delay mode for this job")
-          self.mode = "delay"; self.pump()
-        }
-      }
-    }
+    if mode == "credit" { armCreditFallback() }
     pump()
   }
 
@@ -201,11 +267,13 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   // ---- printer status ----
   func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor ch: CBCharacteristic, error: Error?) {
     if let error = error { log("  subscribe \(ch.uuid) failed: \(error)") }
+    else if verbose { log("  notify on \(ch.uuid): \(ch.isNotifying)") }
   }
   func peripheral(_ p: CBPeripheral, didUpdateValueFor ch: CBCharacteristic, error: Error?) {
     guard let v = ch.value.map({ [UInt8]($0) }), !v.isEmpty else { return }
     if ch.uuid == statusUUID && v[0] == 0x01 && v.count >= 2 {       // 01 nn = +nn credits
-      credits += Int(v[1]); granted += Int(v[1])
+      granted += Int(v[1])
+      if mode == "credit" { credits = min(credits + Int(v[1]), 8) }  // printer never grants >4 ahead; cap guards drift
       if verbose { log("  +\(v[1]) credits (now \(credits))") }
       if mode == "credit" { pump() }
       return
@@ -223,9 +291,26 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   // ---- cleanup ----
   private func finish(_ err: Error?) {
     guard let done = completion else { return }
-    completion = nil; writeChar = nil; central.stopScan()
-    if let p = peripheral { central.cancelPeripheralConnection(p) }
+    completion = nil; central.stopScan()
+    if err == nil, keepAliveMs > 0, mode == "credit", let p = peripheral, p.state == .connected, writeChar != nil {
+      idleGen += 1; let gen = idleGen
+      q.asyncAfter(deadline: .now() + .milliseconds(keepAliveMs)) {
+        if self.idleGen == gen && self.completion == nil { self.closeLink("idle \(keepAliveMs) ms") }
+      }
+    } else {
+      closeLink(nil)
+    }
     done(err)
+  }
+
+  private func closeLink(_ why: String?) {
+    idleGen += 1
+    writeChar = nil
+    guard let p = peripheral, p.state != .disconnected else { return }
+    if let why = why { log("\(why), disconnecting") }
+    if p.state == .connected { closing = true }   // only then is didDisconnect guaranteed
+    quietDisconnect = true
+    central.cancelPeripheralConnection(p)
   }
 }
 
@@ -362,6 +447,7 @@ if args.count >= 3 && args[1] == "send" {                      // one-shot test
 } else if args.count >= 2 && args[1] == "serve" {              // CUPS bridge
   signal(SIGPIPE, SIG_IGN)
   let fd = listenLoopback(listenPort)                          // exits with FATAL if the port is taken
+  rotateLogIfNeeded()
   log("listening on 127.0.0.1:\(listenPort) for \(targetName) (flow \(flow), chunk \(chunkCap), delay \(delayMs) ms), drain \(drainMs) ms")
   DispatchQueue(label: "accept").async {                       // one job at a time
     while true {
@@ -382,6 +468,7 @@ if args.count >= 3 && args[1] == "send" {                      // one-shot test
 
       let sem = DispatchSemaphore(value: 0)
       printer.send(outJob) { err in log(err.map { "job ERROR: \($0)" } ?? "job done"); sem.signal() }
+      rotateLogIfNeeded()
       sem.wait(); close(c)                                     // close → CUPS marks job complete
     }
   }

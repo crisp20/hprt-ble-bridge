@@ -102,8 +102,7 @@ In any print dialog:
 ### Step 6 – Test
 
 ```sh
-tail -f ~/Library/Logs/hprt-ble-bridge-*.log
-# or
+# displays all available logs for hprt bridges
 less +F ~/Library/Logs/hprt-ble-bridge-*.log
 ```
 
@@ -166,25 +165,8 @@ lpstat -v | grep D35BT
 ### logging
 
 ```sh
-
-less +F ~/Library/Logs/hprt-ble-bridge-*.log
-
 # displays all available logs for hprt bridges
-```
-
-### Rebuild binary
-
-```sh
-LABEL="local.hprt-ble-bridge.XXXX"            # XXXX = printer id
-
-# After editing main.swift: rebuild + restart (plist unchanged)
-swiftc -O main.swift -o ~/bin/hprt-ble-bridge \
-  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker Info.plist
-launchctl kickstart -k gui/$(id -u)/$LABEL
-
-# After editing the plist: reload
-launchctl bootout gui/$(id -u)/$LABEL
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/$LABEL.plist
+less +F ~/Library/Logs/hprt-ble-bridge-*.log
 ```
 
 ## Uninstall
@@ -198,7 +180,19 @@ Each printer has its own bridge and queue:
 The binary `~/bin/hprt-ble-bridge` is shared by all printers.
 The HPRT driver and any **USB queue** are left untouched.
 
-### Remove a specific printer
+```sh 
+# Uninstall a specific printer
+sh ./uninstall.sh XXXX # The suffix of the printer
+
+# Uninstall all printers
+sh ./uninstall.sh --all
+
+# ...as well as the print queues
+sh ./uninstall.sh XXXX|--all --queue
+```
+
+<details>
+<summary>note</summary>
 
 ```sh
 SUFFIX=5676                                   # last 4 hex of the printer to remove
@@ -213,31 +207,23 @@ sudo lpadmin -x "HPRT_D35BT_$SUFFIX"          # admin account; a standard accoun
 
 lpstat -v | grep D35BT                        # queue gone, others unchanged
 ```
-
-The other printers keep working. Their ports don't change.
-
-### Remove all printers
-
-Remove all printers and print queues.
-
-```sh
-sh ./uninstall.sh XXXX|--all [--queue]
-```
+</details>
 
 ---
 
 ## Bridge settings (plist `EnvironmentVariables`)
 
-| Variable        | Default                              | Meaning                                                                                                                         |
-| --------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `HPRT_NAME`     | `D35BT-B3F8`                         | Exact BLE name, case-sensitive                                                                                                  |
-| `HPRT_PORT`     | `9100`                               | TCP port on 127.0.0.1 that CUPS connects to; must match the queue URI                                                           |
-| `HPRT_FLOW`     | `delay` (`install.sh` sets `credit`) | `credit` = printer-driven flow control (~5 s), `delay` = acknowledge + pause (~30 s), `paced` = fixed pause, no acknowledgement |
-| `HPRT_CHUNK`    | `100`                                | Max bytes per BLE write. The printer itself caps this at 100                                                                    |
-| `HPRT_DELAY_MS` | `20`                                 | Pause per write in `delay`/`paced` modes                                                                                        |
-| `HPRT_VERBOSE`  | off                                  | `1` logs every characteristic and credit                                                                                        |
-| `HPRT_DRAIN_MS` | `250`                                | Drain time (ms) between jobs. Ensures end of job is not lost.                                                                   |
-| `HPRT_MERGE`    | on                                   | Merges byte-identical consecutive labels into one CPCL label with quantity N. 0 = off                                           |
+| Variable            | Default                              | Meaning                                                                                                                         |
+| ------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `HPRT_NAME`         | `D35BT-B3F8`                         | Exact BLE name, case-sensitive                                                                                                  |
+| `HPRT_PORT`         | `9100`                               | TCP port on 127.0.0.1 that CUPS connects to; must match the queue URI                                                           |
+| `HPRT_FLOW`         | `delay` (`install.sh` sets `credit`) | `credit` = printer-driven flow control (~5 s), `delay` = acknowledge + pause (~30 s), `paced` = fixed pause, no acknowledgement |
+| `HPRT_CHUNK`        | `100`                                | Max bytes per BLE write. The printer itself caps this at 100                                                                    |
+| `HPRT_DELAY_MS`     | `20`                                 | Pause per write in `delay`/`paced` modes                                                                                        |
+| `HPRT_VERBOSE`      | off                                  | `1` logs every characteristic and credit                                                                                        |
+| `HPRT_DRAIN_MS`     | `250`                                | Drain time (ms) between jobs. Ensures end of job is not lost.                                                                   |
+| `HPRT_MERGE`        | on                                   | Merges byte-identical consecutive labels into one CPCL label with quantity N. 0 = off                                           |
+| `HPRT_KEEPALIVE_MS` | `30000`                              | Keep alive (ms) for the printer connection.                                                                                     |
 
 ## References
 

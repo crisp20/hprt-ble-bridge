@@ -17,7 +17,7 @@ port_of() { "$PB" -c 'Print :EnvironmentVariables:HPRT_PORT' "$1" 2>/dev/null ||
 SUFFIX="${1:-}"
 if [ -z "$SUFFIX" ]; then
   has_tty || { echo "usage: sh install.sh XXXX [PORT]   (XXXX = last 4 of the printer name)" >&2; exit 2; }
-  echo "Printer name is on the printer's label / self-test page, e.g. D35BT-91DE → 91DE"
+  echo "Printer name is on the printer's label / self-test page, e.g. D35BT-ABCD → ABCD"
   SUFFIX="$(ask "Printer (last 4 characters):" "")"
 fi
 SUFFIX="$(printf '%s' "$SUFFIX" | tr -d '[:space:]' | tr '[:lower:]' '[:upper:]' | sed 's/^D35BT-//')"
@@ -110,6 +110,10 @@ cat > "$PLIST" <<EOF
     <key>HPRT_NAME</key><string>$NAME</string>
     <key>HPRT_PORT</key><string>$PORT</string>
     <key>HPRT_FLOW</key><string>credit</string>
+    <key>HPRT_KEEPALIVE_MS</key><string>30000</string>
+    <key>HPRT_VERBOSE</key><string>1</string>
+    <key>HPRT_LOG_MAX_KB</key><string>20</string>
+    <key>HPRT_LOG</key><string>$HOME/Library/Logs/hprt-ble-bridge-$SUFFIX.log</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -141,4 +145,4 @@ done
 
 sleep 2; tail -2 "$LOG" 2>/dev/null || true
 echo "Done. Print to 'HPRT D35BT $SUFFIX (Bluetooth)'."
-echo "Per account, once: create the 60 x 40 mm paper size (margins 0) and save Firefox print settings for this printer."
+echo "Create the 60 x 40 mm paper size (margins 0) and save print settings for this printer."
