@@ -54,6 +54,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
   private var closing = false           // we called cancelPeripheralConnection on a connected link
   private var startAfterClose = false   // a job arrived while closing
   private var quietDisconnect = false   // we called cancel ourselves; don't log the callback as a drop
+  private var retriedLink = false       // one reconnect per job when the FF03 handshake is missing
 
   override init() { super.init(); central = CBCentralManager(delegate: self, queue: q) }
 
@@ -68,7 +69,7 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
       self.job += 1; let myJob = self.job
       self.idleGen += 1
       self.completion = completion; self.payload = Data(data); self.offset = 0
-      self.granted = 0; self.writes = 0                         // per-job stats only
+      self.granted = 0; self.writes = 0; self.retriedLink = false // per-job stats only
       self.draining = false; self.pumpScheduled = false; self.lastNotify = ""; self.mode = flow
       if self.closing, self.peripheral?.state == .disconnected { self.closing = false }   // safety
       if let p = self.peripheral, p.state == .connected, self.writeChar != nil, !self.closing {
@@ -104,13 +105,23 @@ final class BLEPrinter: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate
 
   private func armCreditFallback() {
     let myJob = job
-    q.asyncAfter(deadline: .now() + 3) {
-      if self.job == myJob && self.completion != nil && self.granted == 0 && self.offset < self.payload.count {
-        log("  no FF03 credits within 3 s - falling back to delay mode for this job")
-        self.mode = "delay"; self.pump()
+    let wait: Double = retriedLink ? 3 : 1.5
+    q.asyncAfter(deadline: .now() + wait) {
+      guard self.job == myJob, self.completion != nil, self.granted == 0,
+            self.offset < self.payload.count else { return }
+      if !self.retriedLink && self.offset == 0, let p = self.peripheral, p.state == .connected {
+        self.retriedLink = true                               // nothing sent yet → safe to reconnect
+        log("  no FF03 handshake within 1.5 s - reconnecting once")
+        self.writeChar = nil; self.credits = 0; self.maxLen = nil
+        self.closing = true; self.quietDisconnect = true; self.startAfterClose = true
+        self.central.cancelPeripheralConnection(p)            // didDisconnect → findPeripheral()
+        return
       }
+      log("  no FF03 credits within \(Int(wait)) s - falling back to delay mode for this job")
+      self.mode = "delay"; self.pump()
     }
   }
+
 
   // ---- discovery / connection ----
   private func findPeripheral() {
